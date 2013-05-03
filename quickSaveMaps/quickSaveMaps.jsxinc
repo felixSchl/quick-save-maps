@@ -1,0 +1,1693 @@
+///////////////////////////////////////////////////////////////////////////////////////
+//
+//  Author:  Felix Schlitter
+//  Contact: felixSchlitter@gmail.com
+//  Website: www.felixSchlitter.com
+//	License: Creative Commons Attribution-ShareAlike 3.0 Unported
+//
+///////////////////////////////////////////////////////////////////////////////////////
+
+#include "quickSaveMapsUtilities.jsxinc"
+
+/////////////////////////////////////////////////////////////////////
+//// ENTRY
+/////////////////////////////////////////////////////////////////////
+
+// Function to kick off Quick Save Maps
+function saveMaps(mode, kwargs) {
+  
+  // First things first
+  ensure_config();
+  
+  // Create progress window for visual feedback
+  var progwin = new CProgressWindow("Progress...", 0, 100, true, false);
+  progwin.show();
+  progwin.updateProgress('Checking document...');
+  
+  // Create the log object
+  var log = new CLog();
+  readLog(LOGPATH, log);
+  
+  // Check state of document
+  try {
+	  var AD = app.activeDocument;
+	  var AL = AD.activeLayer;
+	} catch(error) {
+		spitDocError(error);
+	  return;
+	}
+  
+  // See if document was saved
+  try {
+    var tmp = AD.fullName;
+  } catch(e) {
+    alert("Please Save the document before exporting maps!");
+    return;
+  }
+  
+  // Set Histories and Layercomp
+	try{
+	  // original history
+		var originalHistory = AD.activeHistoryState;
+		var uniqueID = (new Date).getTime();
+		var lyrCompName = "QSM_TMP_LYRCOMP_"+uniqueID;
+		AD.layerComps.add(lyrCompName,"FOR QUICK SAVE MAPS RESTORE", 1, 1, 1);
+		var my_layerComp = AD.layerComps.getByName(lyrCompName);
+	} catch(error) {
+    spitDocError(error);
+	  return;
+	}
+  
+  progwin.updateProgress('Reading preferences...', 5);
+  
+  /////////////////////
+  // Read preferences
+  /////////////////////
+  if (mode != Enums.saveModes.INTERFACE) {
+    var prefs = new CPreferences();
+    var bPSD = prefs.qsmPrefs.getEnablePSD();
+
+    // Where to load from?
+    if (bPSD) // We load from PSD
+    {
+      // Make sure we actually have a document open
+      try {
+        var AD = app.activeDocument;
+        if (!readPreferences(prefs, Enums.storageModes.PSD, {path: PSDPROPERTY})) {
+          readPreferences(prefs, Enums.storageModes.GENERATE);
+        }
+      } catch(e) {
+        bPSD = false;
+        prefs.session.bUsePSD = false;
+      }
+    }
+    if (!bPSD) // We load from file
+    {
+      if (!readPreferences(prefs, Enums.storageModes.CFG, {path: MAINCFGPATH})) {
+        readPreferences(prefs, Enums.storageModes.GENERATE);
+      }
+    }
+  } 
+  // Else read preferences from kwargs
+  else {
+    prefs = kwargs['prefs'];
+  }
+  
+  progwin.updateProgress('Looking for texture maps...', 10);
+  
+  ///////////////////////////////
+  // Assemble the CRowOut objects
+  ///////////////////////////////
+  var rowsToBeSaved = new Array();
+  if (mode == Enums.saveModes.INTERFACE) {
+    var row = kwargs['row'];
+    var newRow = prepRow( row, true );
+    if ( newRow )
+    {
+      rowsToBeSaved.push( newRow )
+    }
+    else {}
+  }
+  else if (mode == Enums.saveModes.ALL) {
+    for ( x in prefs.rows )
+    {
+      var row = prefs.rows[x];
+      var newRow = prepRow( row, true );
+      if ( newRow )
+      {
+        rowsToBeSaved.push( newRow )
+      }
+    }
+  }
+  else if (mode == Enums.saveModes.SINGLE) {
+    var row = findNearestRowLayerCombo( prefs.rows, AL, AD );
+    if ( row )
+    {
+      var newRow = prepRow( row, true );
+      if ( newRow )
+      {
+        rowsToBeSaved.push( newRow )
+      }
+    }
+  }
+
+  // Defaults: tokens
+  var psdName = AD.fullName.name.replace(/\.[^.]*$/gi, "");
+  
+  // Defaults: format
+  var defaultFormat = prefs.defaults.getFormat();
+  
+  // Defaults: path
+  var token_path = AD.fullName.path+"/";
+  if (prefs.defaults.getUseCustomPath()) {
+    if (prefs.defaults.getIsRelativePath()) {
+      token_path += prefs.defaults.getPath();
+    } else {
+      token_path = new Folder(prefs.defaults.getPath());
+      token_path = token_path.fsName;
+    }
+    // Make sure the path ends with an '/'
+    if (!token_path.match(/[\/\\]$/gi)) {
+      token_path += '/';
+    }
+  }
+  
+  // Defaults: Processor
+  var default_processor = prefs.defaults.getProcessor();
+  var default_PreProcessor = default_processor.getPreProcessor();
+  var default_PostProcessor = default_processor.getPostProcessor();
+
+  // Defaults: basename
+  var token_basename = '';
+  if (prefs.defaults.getUseCustomBasename()) {
+    token_basename = prefs.defaults.getBasename();
+  } else {
+    token_basename = psdName;
+  }
+  
+  var current_progress = (100 - progwin.getProgress());
+  var percent_per_row = (current_progress / rowsToBeSaved.length);
+  
+  ///////////////////////////
+  // FINAL PROCESSING OF ROWS
+  ////////////////////////////
+  for (var i = 0, ii = rowsToBeSaved.length; i < ii; i++) {
+    // Retrieve the rowOut object
+    var rowOut = rowsToBeSaved[i];
+    var layer = rowOut.getLayer();
+
+    // Create logging instances
+    var logEntry = rowOut.getLogEntry();
+    log.addEntry(logEntry);
+    var logProperties = logEntry.getProperties(); 
+    var logErrors = logEntry.getErrors();
+    var timeStarted = new Date().getTime();
+    
+    // Make note of history state
+    var history_per_row = AD.activeHistoryState;
+    
+    ////////////////////////////
+    // The row variable aliases
+    ////////////////////////////
+    var row = rowOut.getRow();
+    var rowFormat = row.getFormat();
+    var rowProcessor = row.getProcessor();
+    var rowPreProcessor = rowProcessor.getPreProcessor();
+    var rowPostProcessor = rowProcessor.getPostProcessor();
+    var rowComposeRGB = row.getComposeRGB();
+    var formatInUse = rowFormat.getFormatInUse();
+    
+    // If Format is Default, set it to the Format the Default is using
+    if (formatInUse == Enums.formats.DEFAULT) {
+      // Fallback to default format
+      // Simply replace the format property of the row with the defaults format property
+      // Rescue Conversion property since it is unique to each row
+      var rowFormat_Conversion = rowFormat.getConversion();
+      rowFormat = defaultFormat;
+      rowFormat.setConversion(rowFormat_Conversion);
+      formatInUse = rowFormat.getFormatInUse();
+    }
+    
+    var saveoptions = rowFormat.getSaveOptions();
+    var row_conversion = rowFormat.getConversion();
+    var token_row_basename = row.getBasename() ? trim(String(row.getBasename())) : token_basename;
+    var token_convention = row.getConvention();
+    var token_extension = formatInUse.extension;
+
+    var composedLayers = rowOut.getComposedRGBLayers();
+    var layerRed = composedLayers.red;
+    var layerGreen = composedLayers.green;
+    var layerBlue = composedLayers.blue;
+    var bIsComposedRGB = rowComposeRGB.getIsUsed();
+    var bIsFullyRGBComposed = ( layerRed && layerGreen && layerBlue );
+    
+    // DDS: Check for valid profile file before spending any more time!
+    if ( formatInUse == Enums.formats.DDS ) {
+      var profileFile = new File(saveoptions.profile);
+        if ( !profileFile.exists ) {
+          alert('The DDS profile file could not be found for map "' + row.getName() + '"');
+          // Skip this row
+          continue;
+        }
+    }
+    
+    // DDS: check if converter exist before spending any more time!
+    if ( rowFormat.getFormatInUse() == Enums.formats.DDS )
+    {
+      var converter = new File(prefs.qsmPrefs.getPathToDDStool());
+      if ( !converter.exists )
+      {
+        if ( mode == Enums.saveModes.SINGLE || mode == Enums.saveModes.INTERFACE )
+        {
+          alert("Could not save DDS because the path to the converter is either not set or incorrect.");
+        }
+        else
+        {
+           // Log that document could not be saved
+          logEntry.addError({
+            name: 'DDS converter not found - map not saved.',
+            description: 'Please make sure that the path to the DDS converter is set before usage. To set the path go into the format options of any DDS map you configured.',
+          });
+        }
+        // skip this one
+        continue;
+      }
+    }
+    
+    // Progress: Initializing
+    // num_steps is for the progressBar only!
+    var num_steps = 6;
+    
+    // Row: Name
+    var name = '';
+    name = row.getName();
+    
+    var tempdoc;
+    tempDoc = app.documents.add(AD.width, AD.height, AD.resolution, TEMPDOCNAME, NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
+    
+    // atnLayerFromBackground();
+    app.activeDocument = AD;
+    
+    // Row: Image
+    if ( ( !bIsFullyRGBComposed && bIsComposedRGB && layer ) || ( !bIsComposedRGB ) )
+    {
+      // Set the active layer to be the main layerset and merge
+      layer.visible = true;
+      
+      // Isolate selected layer (main layer)
+      // Create a dummy layer and set it to invisible to fool the Toggle Isolate Layer function
+      // If we don't do this, the Toggle Isolate Layer function might be hiding layerset instead of showing it...
+      var dummyLayer = layer.artLayers.add();
+      dummyLayer.visible = false;
+      
+      // Set the new active layer temporarily
+      AD.activeLayer = layer;
+      atnToggleIsolateLayer();
+      
+      // Take snapshot and take to new document
+      // atnDuplicateMerged();
+      try {
+        atnCopyAllMerged();
+      } catch(e)
+      {
+        var dummyLayer = layer.artLayers.add();
+        dummyLayer.visible = true;
+        atnFillBlack();
+      }
+      atnCopyAllMerged();
+      app.activeDocument = tempDoc;
+      atnPasteInPlace();
+      tempDoc.selection.deselect();
+      
+      // Switch back to original document
+      app.activeDocument = AD;
+    }
+    
+    if ( bIsComposedRGB )
+    {
+      if ( bIsFullyRGBComposed || ( !bIsFullyRGBComposed && !layer ) )
+      {
+        app.activeDocument = tempDoc;
+        atnFillBlack();
+        app.activeDocument = AD;
+      }
+      // Red Layer
+      if ( layerRed )
+      {
+        layerRed.visible = true;
+        var dummyLayer = layerRed.artLayers.add();
+        dummyLayer.visible = false;
+        AD.activeLayer = layerRed;
+        atnToggleIsolateLayer();
+        // PASTE RED Channel
+        try {
+          atnCopyAllMerged();
+        } catch(e)
+        {
+          var dummyLayer = layerRed.artLayers.add();
+          dummyLayer.visible = true;
+          atnFillBlack();
+        }
+        atnCopyAllMerged();
+        app.activeDocument = tempDoc;
+        atnPasteToRedChannel();
+        tempDoc.selection.deselect();
+        // Switch back to original document
+        app.activeDocument = AD;
+      }
+      
+      // Green Layer
+      if ( layerGreen )
+      {
+        layerGreen.visible = true;
+        var dummyLayer = layerGreen.artLayers.add();
+        dummyLayer.visible = false;
+        AD.activeLayer = layerGreen;
+        atnToggleIsolateLayer();
+        // PASTE GREEN Channel
+        try {
+          atnCopyAllMerged();
+        } catch(e)
+        {
+          var dummyLayer = layerGreen.artLayers.add();
+          dummyLayer.visible = true;
+          atnFillBlack();
+        }
+        atnCopyAllMerged();
+        app.activeDocument = tempDoc;
+        atnPasteToGreenChannel();
+        tempDoc.selection.deselect();
+        // Switch back to original document
+        app.activeDocument = AD;
+      }
+      
+      // Blue Layer
+      if ( layerBlue )
+      {
+        layerBlue.visible = true;
+        var dummyLayer = layerBlue.artLayers.add();
+        dummyLayer.visible = false;
+        AD.activeLayer = layerBlue;
+        atnToggleIsolateLayer();
+        // PASTE BLUE Channel
+        try {
+          atnCopyAllMerged();
+        } catch(e)
+        {
+          var dummyLayer = layerBlue.artLayers.add();
+          dummyLayer.visible = true;
+          atnFillBlack();
+        }
+        atnCopyAllMerged();
+        app.activeDocument = tempDoc;
+        atnPasteToBlueChannel();
+        tempDoc.selection.deselect();
+        // Switch back to original document
+        app.activeDocument = AD;
+      }
+    }
+    
+    AD.selection.deselect();
+    
+    // Progress: "Processing Map"
+    var progress_text = ( 'Processing map (' + ( i + 1 ) + '/' + ii + ') : "' + name + '". ' );
+    progwin.updateProgress( progress_text + 'Creating image...', ( current_progress + ( percent_per_row * ( i + 1 ) ) ) * ( 1/num_steps ) );
+
+    /* DROPPED FEATURE: CONVERSIONS
+    // Row: Conversions
+    app.activeDocument = tempDoc;
+    switch (row_conversion.keyname) {
+      case 'GRAYSCALE':
+        //tempDoc.changeMode(ChangeMode.GRAYSCALE);
+        atnGrayscale();
+        break;
+      case 'INVERT_RED_GREEN':
+        atnInvertRedGreen();
+        break;
+    }
+    app.activeDocument = AD;
+    */
+    
+    // Row: Alpha and Alpha Layer
+    if (formatInUse.alpha && rowFormat.isUsedAlpha()) {
+      // Do Alpha Layer if...
+      // ...we actually want to save it and if we have one
+      if (rowFormat.isUsedAlphaLayer() && (rowOut.getAlphaLayer() !== undefined)) {
+        var alphaLayer = rowOut.getAlphaLayer();
+        progwin.updateProgress(progress_text+'Creating alpha layer...', (current_progress + (percent_per_row * (i+1))) * (2/num_steps));
+        // Jump back to original document
+        app.activeDocument = AD;
+
+        // Isolate selected layer (alpha layer)
+        // Create a dummy layer and set it to invisible to fool the Toggle Isolate Layer function
+        var dummyLayer = alphaLayer.artLayers.add();
+        dummyLayer.visible = false;
+        
+        // Set the active layer to be the alpha layer
+        AD.activeLayer = alphaLayer;
+        AD.activeLayer.visible = true;
+        atnToggleIsolateLayer();
+        
+        // Select and copy
+        try {
+          atnCopyAllMerged();
+        } catch(e)
+        {
+          var dummyLayer = layer.artLayers.add();
+          dummyLayer.visible = true;
+          atnFillBlack();
+        }
+        atnCopyAllMerged();
+        
+        // Back to the new document
+        app.activeDocument = tempDoc;
+        
+        // TGA wants a separate channel, but PNG wants 'transparency' in photoshop...
+        // Copy the alpha layer into the alpha channel of new document
+        var alphaChannel = tempDoc.channels.add();
+        alphaChannel.name = 'alpha';
+
+        // This will paste right into the alpha channel
+        atnPasteInPlace();
+        tempDoc.selection.deselect();
+        
+        if (formatInUse == Enums.formats.PNG) {
+          atnMoveAlphaChannelToLayermask();
+        }
+      }
+      else
+      {
+        if ( rowFormat.getFormatInUse() == Enums.formats.DDS || rowFormat.getFormatInUse() == Enums.formats.TGA ) {
+          // play action to put transparency into alpha channel
+          app.activeDocument = tempDoc;
+          atnAlphaChannelfromTransparency();
+          atnMakeBlackLayer();
+          app.activeDocument = AD;
+        }
+      }
+      
+      // If we are dealing with TGA / (Pseudo DDS) then switch to 32bits/pixel and create an alpha channel if neccessary
+      if ( rowFormat.getFormatInUse() == Enums.formats.DDS || rowFormat.getFormatInUse() == Enums.formats.TGA ) {
+        // We have to do some last minute checks on the saveoptions to add logic we were not able to add ealier
+        if (formatInUse == Enums.formats.TGA) {
+          if (rowFormat.isUsedAlpha()) {
+            // override to 32 bits/pixel and alphaChannels = true
+            saveoptions.alphaChannels = true;
+            saveoptions.resolution = TargaBitsPerPixels.THIRTYTWO;
+            // Log that we needed to switch to 32 bits/pixel
+            logEntry.addError({
+              name: 'Warning: Saved TGA with 32 bits/pixel.',
+              description: 'This map uses the alpha channel and therefore needs to be saved with 32bits/pixel.',
+            });
+          } 
+        } 
+      }
+    } else {
+      // Flatten document to get rid of transparency
+      app.activeDocument = tempDoc;
+      tempDoc.flatten();
+      app.activeDocument = AD;
+    }
+    
+    // Row: Resize
+    app.activeDocument = tempDoc;
+    var row_scale = row.getScale();
+    // var resampler = prefs.defaults.getResampler().resampleMethod;
+    var resampler = row.getResampler().resampleMethod;
+    if ( ! resampler )
+    {
+      resampler = prefs.defaults.getResampler().resampleMethod;
+    }
+    
+    if ( row.getIsScaleFixed() )
+    {
+      tempDoc.resizeImage( UnitValue( row.getScaleX(), "px" ), UnitValue( row.getScaleY(), "px" ), undefined, resampler );
+    }
+    else if (row_scale != 1)
+    {
+      tempDoc.resizeImage( (tempDoc.width * row_scale), (tempDoc.height * row_scale), undefined, resampler);
+    }
+    
+    // Row: Preprocessing actions
+    // Row: Default preprocessing
+    if (default_PreProcessor.getIsUsed()) {
+      progwin.updateProgress(progress_text+'Pre-processing DEFAULTS...', (current_progress + (percent_per_row * (i+1))) * (3/num_steps));
+      var actions = default_PreProcessor.getActions();
+      for (var k = 0, kk = actions.length; k < kk; k++) {
+        progwin.updateProgress(progress_text+'Playing action "'+actions[k].name+'"...');
+        try {
+          app.doAction(actions[k].name, actions[k].set);
+        } catch(e) {
+          progwin.updateProgress(progress_text+'Playing action "'+actions[k].name+'" FAILED!');
+          logEntry.addError({
+            name: 'Action "'+actions[k].name+'" failed. (From Defaults)',
+            description: 'The action could either not be found or was cancelled by the user. This action is part of the action set "'+ actions[k].set +'".',
+          });
+        }
+      }
+    }
+    
+    // Row: Row specific preprocessing
+    if (rowPreProcessor.getIsUsed()) {
+      progwin.updateProgress(progress_text+'Pre-processing...', (current_progress + (percent_per_row * (i+1))) * (3/num_steps));
+      var actions = rowPreProcessor.getActions();
+      for (var k = 0, kk = actions.length; k < kk; k++) {
+        progwin.updateProgress(progress_text+'Playing action "'+actions[k].name+'"...');
+        try {
+          app.doAction(actions[k].name, actions[k].set);
+        } catch(e) {
+          progwin.updateProgress(progress_text+'Playing action "'+actions[k].name+'" FAILED!');
+          logEntry.addError({
+            name: 'Action "'+actions[k].name+'" failed.',
+            description: 'The action could either not be found or was cancelled by the user. This action is part of the action set "'+ actions[k].set +'".',
+          });
+        }
+      }
+    }
+    
+    // Row: The filename
+    var saveFile = new File(token_path + token_row_basename + token_convention + '.' + token_extension);
+    progwin.updateProgress(progress_text+'Saving file...', (current_progress + (percent_per_row * (i+1))) * (4/num_steps));
+
+    // Log: "The location"
+    logProperties.setLocation(new File(token_path).fsName);
+    
+    // If format is dds, disguise saved tga file as dds!
+    // Log: "The filename"
+    if ( rowFormat.getFormatInUse() == Enums.formats.DDS ) {
+      token_extension = 'dds';
+    }
+    logProperties.setFileName(token_row_basename + token_convention + '.' + token_extension);
+    
+    // Log: "The name"
+    logProperties.setName(name);
+   
+    // Row: Try to save the file
+    app.activeDocument = tempDoc;
+    try {
+      var folder = new Folder(token_path);
+      if (!folder.exists) {
+        folder.create();
+      }
+      
+      if ( rowFormat.getFormatInUse() == Enums.formats.PNG )
+      {
+        tempDoc.exportDocument( saveFile, ExportType.SAVEFORWEB, saveoptions );
+      }
+      else if ( rowFormat.getFormatInUse() == Enums.formats.DDS )
+      {
+        var targaSaveOpts = new TargaSaveOptions();
+        targaSaveOpts.rleCompression = false;
+        targaSaveOpts.resolution = TargaBitsPerPixels.THIRTYTWO;
+        saveFile = new File(Folder.temp + '/qsm_temp.tga');
+        tempDoc.saveAs( saveFile, targaSaveOpts, true, Extension.LOWERCASE );
+        var converter = new File(prefs.qsmPrefs.getPathToDDStool());
+        var cmdConvert = ( '"' + converter.fsName + '" -profile "' + saveoptions.profile + '" -file "' + saveFile.fsName + '" -output "' + ( logProperties.getLocation() + "\\" + logProperties.getFileName() ) + '"' );
+        
+        if ( ! saveoptions.ownThread )
+        {
+          var exitCode = app.system('"' + cmdConvert + '"');
+          if ( exitCode != 0 )
+          {
+            alert("There was a problem converting to DDS. Exit Code " + exitCode );
+          }
+        }
+        else
+        {
+          var fname = "convertToDDS.bat";
+          var launcher = new File(Folder.temp + '/' + fname);
+          // Try to open the launcher
+          try {
+            launcher.open('w');
+          } catch (e) {
+            // Log that the launcher could
+            logEntry.addError({
+              name: 'The DDS converter could not be launched.',
+              description: '',
+            });
+          }
+          launcher.writeln(cmdConvert);
+          launcher.execute();
+          launcher.close();
+        }
+
+      }
+      else if ( rowFormat.getFormatInUse() == Enums.formats.CRYTIF )
+      {
+        try {
+          atnLaunchCryTifDialog( token_path );
+        } catch (e)
+        {
+          if ( mode == Enums.saveModes.SINGLE || mode == Enums.saveModes.INTERFACE )
+          {
+            alert("The cryTIF plugin is not available. Please make sure it is installed. (Map: "+ row.getName() +")");
+          }
+          else
+          {
+             // Log that document could not be saved
+            logEntry.addError({
+              name: 'cryTIF plugin not found - map not saved.',
+              description: 'Please make sure that the crytek cryTIF plugin is installed before using this format.',
+            });
+          }
+        }
+        // get a hold of saved file
+        var outTif = new File( token_path+'/'+TEMPDOCNAME+' copy.tif' );
+        if ( outTif.exists )
+        {
+          var newName = ( token_row_basename + token_convention + '.tif' );
+          var renamedFile = new File( token_path + '/' + newName );
+          if ( renamedFile.exists )
+          {
+            renamedFile.remove();
+          }
+          outTif.rename( newName );
+        }
+      }
+      else
+      {
+        tempDoc.saveAs( saveFile, saveoptions, true, Extension.LOWERCASE );
+      }
+    } catch(e) {
+      // Log that document could not be saved
+      logEntry.addError({
+        name: 'The document could not be saved.',
+        description: 'This is often caused if are accessing the same file from somewhere else or if you do not have the permissions to write to this file.',
+      });
+      switch (e.number) {
+        case -43:
+          alert("The document could not be saved. Please make sure your configuration does not contain any illegal characters.")
+          break;
+        default:
+          alert("Could not save document! Please do not load or save document somewhere else in the meanwhile.");
+          break;
+      }
+    }
+    
+    // Remove the temporary document
+    tempDoc.close(SaveOptions.DONOTSAVECHANGES);
+
+    // Reset history and document
+    app.activeDocument = AD;
+    try {
+      AD.activeHistoryState = history_per_row;
+    } catch (e) {}
+    
+    // Log: Evaluate execution speed (w/o post processing)
+    var timeEnded = new Date().getTime();
+    var timeTaken = timeEnded - timeStarted;
+    timeTaken = String(timeTaken) + 'ms (~' + String(timeTaken / 1000) + ' seconds)';
+    // Log: "Time taken"
+    logProperties.setTimeTaken(String(timeTaken));
+    
+    // Row: Post processing instructions
+    var postProcessors = [];
+    // Postpro: Defaults first
+    if (default_PostProcessor.getIsUsed() && default_PostProcessor.getDropletPath() != '' ) {
+      postProcessors.push(default_PostProcessor);
+    }
+    // Postpro: Row last
+    if (rowPostProcessor.getIsUsed() && rowPostProcessor.getDropletPath() != '' ) {
+      postProcessors.push(rowPostProcessor);
+    }
+    for (m in postProcessors) {
+      postprocessor = postProcessors[m];
+      // See if droplet is a valid file path
+      var droplet = new File(postprocessor.getDropletPath());
+      if (!droplet.exists) {
+        //alert ('Droplet file not found!');
+        logEntry.addError({
+          name: 'Droplet not found ("'+droplet.fsName+'")',
+          description: 'Make sure the path to the droplet is correct.',
+        });
+      }
+      else {
+        progwin.updateProgress('Post-processing...', (current_progress + (percent_per_row * (i+1))) * (5/num_steps));
+
+        var args = postprocessor.getArguments();
+        if (args) {
+          var interpreted_args = [];
+          // Go through argument list and substitute variables with facts
+          for (var k = 0, kk = args.length; k < kk; k++) {
+            var arg = args[k];
+            if(args[k].charAt(0) == '$') {
+              switch (args[k]) {
+                case '$PATH':
+                  arg = (saveFile.fsName);
+                  break;
+                case '$PATH_ONLY':
+                  arg = (new File(token_path)).fsName;
+                  break;
+                case '$FILENAME':
+                  arg = (token_row_basename + token_convention + '.' + token_extension);
+                  break;
+                case '$FILENAME_NO_EXT':
+                  arg = (token_row_basename + token_convention);
+                  break;
+                case '$LAYER_NAME':
+                  arg = (row.getName());
+                  break;
+                case '$CONVENTION':
+                  arg = (token_convention);
+                  break;
+                case '$FORMAT':
+                  arg = (rowFormat.getFormatInUse().nicename);
+                  break;
+                case '$SCALE':
+                  arg = String((row.getScale()));
+                  break;
+                case '$CONVERSION':
+                  arg = (rowFormat.getConversion().keyname);
+                  break;
+                case '$BASENAME':
+                  arg = (row.getBasename());
+                  break;
+              }
+            }
+            arg = arg.replace(/\\/gi,"/");
+            interpreted_args[k] = arg;
+          }
+          var arglist = ' "' + interpreted_args.join('" "') + '"';
+        }
+        
+        var cmdPostProcess = ( '"' + droplet.fsName + '"' + arglist );
+        
+        if ( ! postprocessor.getUseOwnThread() )
+        {
+          var exitCode = app.system('"' + cmdPostProcess + '"');
+          if ( exitCode != 0 )
+          {
+            alert("There was a problem executing the droplet. Exit Code " + exitCode );
+          }
+        }
+        else
+        {
+          var fname = "launchPostProcess.bat";
+          var launcher = new File(Folder.temp + '/' + fname);
+          // Try to open the launcher
+          try {
+            launcher.open('w');
+          } catch (e) {
+            // Log that the launcher could
+            logEntry.addError({
+              name: 'The droplet could not be launched.',
+              description: '',
+            });
+          }
+          launcher.writeln( cmdPostProcess );
+          launcher.execute();
+          launcher.close();
+        }
+      }
+    }
+    
+    // Log: "DONE!"
+    progwin.updateProgress('Done!', (current_progress + (percent_per_row * (i+1))) * (6/num_steps));
+  }
+  
+  // Set back active layer & restore visiblity
+  AD.activeLayer = AL;
+  
+  // We use layer comps to restore layer visibilities
+  my_layerComp.apply();
+  my_layerComp.remove();
+  
+  // Restore history
+  try {
+  AD.activeHistoryState = originalHistory;
+  } catch (e) {}
+  
+  // Write log to disk
+  writeLog(log);
+  
+  // Done with progress window
+  progwin.close();
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//// CLASSES
+/////////////////////////////////////////////////////////////////////
+
+// Class for the progress window
+function CProgressWindow(title, min, max, parent, useCancel) {
+
+  var win = new Window('palette', title);
+  win.bar = win.add('progressbar', undefined, min, max);
+  win.bar.preferredSize = [400, 20];
+  win.parent = undefined;
+
+  if (parent) {
+    if (parent instanceof Window) {
+      win.parent = parent;
+    } else if (useCancel == undefined) {
+      useCancel = parent;
+    }
+  }
+
+  if (useCancel) {
+    win.cancel = win.add('button', undefined, 'Cancel');
+    win.cancel.onClick = function() {
+      try {
+        if (win.onCancel) {
+          var rc = win.onCancel();
+          if (rc || rc == undefined) {
+            win.close();
+          }
+        } else {
+          win.close();
+        }
+      } catch (e) {
+        alert(e);
+      }
+    }
+  }
+
+  this.updateProgress = function(text, value) {
+    win.text = text;
+    
+    if (value) {
+      win.bar.value = value;
+    }
+  }
+  
+  this.getProgress = function() {
+    return win.bar.value;
+  }
+  
+  this.show = function() {
+    win.show();
+  }
+  
+  this.close = function() {
+    win.close();
+  }
+  
+  win.center(win.parent);
+  
+};
+
+// Class to tie together CRow and Saving Progress
+function CRowOut() {
+  
+  // Properties
+  var row = undefined;
+  var layer = undefined;
+  var alphaLayer = undefined;
+  var logEntry = new CLogEntry();
+  var composedRGBLayers = {};
+  
+  // Setters
+  this.setRow = function(newRow) {
+    row = newRow;
+  }
+  this.setLayer = function(newLayer) {
+    layer = newLayer;
+  }
+  this.setAlphaLayer = function(newAlphaLAyer) {
+    alphaLayer = newAlphaLAyer;
+  }
+  this.setComposedRGBLayers = function(newComposedRGBLayers) {
+    composedRGBLayers = newComposedRGBLayers;
+  }
+  
+  // Getters
+  this.getRow = function() {
+    return row;
+  }
+  this.getLayer = function() {
+    return layer;
+  }
+  this.getAlphaLayer = function() {
+    return alphaLayer;
+  }
+  this.getLogEntry = function() {
+    return logEntry;
+  }
+  this.getComposedRGBLayers = function() {
+    return composedRGBLayers;
+  }
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//// FUNCTIONS
+/////////////////////////////////////////////////////////////////////
+
+function prepRow(row, bVerbose) {
+  // Create and prep row out object
+  var rowOut = new CRowOut();
+  rowOut.setRow( row );
+  var logEntry = rowOut.getLogEntry();
+  
+  // Check the row's layer sets for existence and assemble the final rowOut for processing
+  var composeRGB = row.getComposeRGB();
+  var format = row.getFormat();
+  
+  var layer = undefined;
+  var layerRed = undefined;
+  var layerGreen = undefined;
+  var layerBlue = undefined;
+
+  // Find only the single layer set
+  try {
+    layer = AD.layerSets.getByName(row.getName());
+  } catch(e) {
+    layer = undefined;
+  }
+  
+  // Get the RGB Layers
+  if ( composeRGB.getIsUsed() )
+  {
+    // Red
+    if ( composeRGB.getIsUsedLayerRed() )
+    {
+      try {
+        layerRed = AD.layerSets.getByName( composeRGB.getLayerRed() );
+      } catch (e) {
+        layerRed = undefined;
+        /*
+        if ( bVerbose )
+        {
+          alert( 'Cannot find layerset "' + composeRGB.getLayerRed() +'" for Red channel! (Map: "'+ row.getName() +'")');
+        }
+        return false;
+        */
+        // Log that alpha layer was not found
+        logEntry.addError({
+          name: 'The Red Channel layer "'+ composeRGB.getLayerRed() +'" was not found.',
+          description: 'Make sure you actually have a layerset with the name "'+ format.getAlphaLayer() +'" if you want to use it as your Red channel.',
+        });
+      }
+    } else {
+      layerRed = undefined;
+    }
+    // Green
+    if ( composeRGB.getIsUsedLayerGreen() )
+    {
+      try {
+        layerGreen = AD.layerSets.getByName( composeRGB.getLayerGreen() );
+      } catch (e) {
+        layerGreen = undefined;
+        /*
+        if ( bVerbose )
+        {
+          alert( 'Cannot find layerset "' + composeRGB.getLayerGreen() +'" for Green channel! (Map: "'+ row.getName() +'")');
+        }
+        return false;
+        */
+        logEntry.addError({
+          name: 'The Green Channel layer "'+ composeRGB.getLayerGreen() +'" was not found.',
+          description: 'Make sure you actually have a layerset with the name "'+ format.getAlphaLayer() +'" if you want to use it as your Green channel.',
+        });
+      }
+    } else {
+      layerGreen = undefined;
+    }
+    // Blue
+    if ( composeRGB.getIsUsedLayerBlue() )
+    {
+      try {
+        layerBlue = AD.layerSets.getByName( composeRGB.getLayerBlue() );
+      } catch (e) {
+        layerBlue = undefined;
+        /*
+        if ( bVerbose )
+        {
+          alert( 'Cannot find layerset "' + composeRGB.getLayerBlue() +'" for Blue channel! (Map: "'+ row.getName() +'")');
+        }
+        return false;
+        */
+        logEntry.addError({
+          name: 'The Blue Channel layer "'+ composeRGB.getLayerBlue() +'" was not found.',
+          description: 'Make sure you actually have a layerset with the name "'+ format.getAlphaLayer() +'" if you want to use it as your Blue channel.',
+        });
+      }
+    } else {
+      layerBlue = undefined;
+    }
+    
+    rowOut.setComposedRGBLayers({
+      red: layerRed,
+      green: layerGreen,
+      blue: layerBlue,
+    });
+  }
+  
+  // See if row is valid:
+  // The primary layer is only used if:
+  // - ComposeRGB is not used
+  // - ComposeRGB IS used but not all 3 channels
+  // If it needs to be used but is not available, bail out!
+  if ( composeRGB.getIsUsed() )
+  {
+    if ( layerRed && layerGreen && layerBlue )
+    {
+      layer = undefined;
+    }
+    /*
+    else
+    {
+      if ( layer === undefined )
+      {
+        if ( bVerbose )
+        {
+          alert( 'Cannot find main layerset "' + row.getName() + '"' );
+        }
+        return false;
+      }
+    }
+    */
+  }
+  else
+  {
+    if ( layer == undefined )
+    {
+      if ( bVerbose )
+      {
+        alert( 'Cannot find layerset for Map "' + row.getName() + '"' );
+      }
+      return false;
+    }
+  }
+  
+  // Finally set the rowOut layer
+  rowOut.setLayer( layer );
+  
+  // Get the Alpha Layer
+  var alphaLayer = undefined;
+  if ( format.isUsedAlpha() && format.isUsedAlphaLayer() ) {
+    try {
+      alphaLayer = AD.layerSets.getByName(format.getAlphaLayer());
+    } catch(e) {
+      alphaLayer = undefined;
+      // Log that alpha layer was not found
+      logEntry.addError({
+        name: 'The Alpha layer "'+ format.getAlphaLayer() +'" was not found.',
+        description: 'Make sure you actually have a layerset with the name "'+ format.getAlphaLayer() +'" if you want to use it as your alpha layer.',
+      });
+    }
+  }
+  rowOut.setAlphaLayer(alphaLayer);
+
+  return rowOut;
+}
+
+// Function to find a matching main layer for a row
+function findNearestRowLayerCombo(rows, activeLayer, activeDocument) {
+  var AD = activeDocument;
+  if (activeLayer.parent.typename == "Document")  //activeLayer.typename == "LayerSet"
+  {
+    if ( activeLayer.typename == "LayerSet" )
+    {
+      
+      // First iteration, check row names only
+      for ( x in rows ) {
+        var row = rows[x];
+        if ( activeLayer.name == row.getName() )
+        {
+          return row;
+        }
+      }
+      
+      // Second iteration, check channels also!
+      for ( x in rows ) {
+        var row = rows[x];
+        var composeRGB = row.getComposeRGB();
+        var bUseComposeRGB = composeRGB.getIsUsed();
+        var format = row.getFormat();
+        
+        if ( bUseComposeRGB )
+        {
+          if ( ( activeLayer.name == composeRGB.getLayerRed() && composeRGB.getIsUsedLayerRed() )
+            || ( activeLayer.name == composeRGB.getLayerGreen() && composeRGB.getIsUsedLayerGreen() )
+            || ( activeLayer.name == composeRGB.getLayerBlue() && composeRGB.getIsUsedLayerBlue() )
+            || ( activeLayer.name == format.getAlphaLayer() && format.isUsedAlphaLayer() )
+          )
+          {
+            return row;
+          }
+        }
+      }
+    }
+    
+    // We are only here if
+    // no eligible layer was found
+    alert("No eligible layer was found.");
+    return false;
+  }
+  else
+  {
+    return findNearestRowLayerCombo(rows, activeLayer.parent, activeDocument);
+  }
+}
+
+/////////////////////////////////////////////////////////////////////
+//// ACTIONS
+/////////////////////////////////////////////////////////////////////
+
+// Function to launch the cryTIFdialog
+function atnLaunchCryTifDialog(location) {
+  // =======================================================
+var idsave = charIDToTypeID( "save" );
+    var desc24 = new ActionDescriptor();
+    var idAs = charIDToTypeID( "As  " );
+        var desc25 = new ActionDescriptor();
+        var idbarF = charIDToTypeID( "barF" );
+        desc25.putBoolean( idbarF, true );
+    var idCrytekCryTIFPlugin = stringIDToTypeID( "Crytek CryTIFPlugin" );
+    desc24.putObject( idAs, idCrytekCryTIFPlugin, desc25 );
+    var idIn = charIDToTypeID( "In  " );
+    desc24.putPath( idIn, new File( location ) );
+    var idCpy = charIDToTypeID( "Cpy " );
+    desc24.putBoolean( idCpy, true );
+executeAction( idsave, desc24, DialogModes.NO );
+}
+
+// Function to fill a layer black
+function atnFillBlack(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putEnumerated(cTID('Usng'), cTID('FlCn'), cTID('Blck'));
+    desc1.putUnitDouble(cTID('Opct'), cTID('#Prc'), 100);
+    desc1.putEnumerated(cTID('Md  '), cTID('BlnM'), cTID('Nrml'));
+    executeAction(cTID('Fl  '), desc1, dialogMode);
+};
+
+// Function to make a black base layer for tga premultiplication
+function atnMakeBlackLayer() {
+  // Make
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putClass(cTID('Lyr '));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('Mk  '), desc1, dialogMode);
+  };
+
+  // Move
+  function step2(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
+    desc1.putReference(cTID('null'), ref1);
+    var ref2 = new ActionReference();
+    ref2.putIndex(cTID('Lyr '), 0);
+    desc1.putReference(cTID('T   '), ref2);
+    desc1.putBoolean(cTID('Adjs'), false);
+    desc1.putInteger(cTID('Vrsn'), 5);
+    executeAction(cTID('move'), desc1, dialogMode);
+  };
+
+  // Fill
+  function step3(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putEnumerated(cTID('Usng'), cTID('FlCn'), cTID('Blck'));
+    desc1.putUnitDouble(cTID('Opct'), cTID('#Prc'), 100);
+    desc1.putEnumerated(cTID('Md  '), cTID('BlnM'), cTID('Nrml'));
+    executeAction(cTID('Fl  '), desc1, dialogMode);
+  };
+
+  step1();      // Make
+  step2();      // Move
+  step3();      // Fill
+};
+
+// Function to paste in place
+function atnPasteInPlace() {
+  // Paste
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putBoolean(sTID("inPlace"), true);
+    desc1.putEnumerated(cTID('AntA'), cTID('Annt'), cTID('Anno'));
+    executeAction(cTID('past'), desc1, dialogMode);
+  };
+
+  step1();      // Paste
+};
+
+// Function to convert the background to a layer
+function atnLayerFromBackground() {
+  // Set
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Lyr '), cTID('Bckg'));
+    desc1.putReference(cTID('null'), ref1);
+    var desc2 = new ActionDescriptor();
+    desc2.putUnitDouble(cTID('Opct'), cTID('#Prc'), 100);
+    desc2.putEnumerated(cTID('Md  '), cTID('BlnM'), cTID('Nrml'));
+    desc1.putObject(cTID('T   '), cTID('Lyr '), desc2);
+    executeAction(cTID('setd'), desc1, dialogMode);
+  };
+
+  step1();      // Set
+};
+
+function atnAlphaChannelfromTransparency() {
+  // Make
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putClass(cTID('Lyr '));
+    desc1.putReference(cTID('null'), ref1);
+    var desc2 = new ActionDescriptor();
+    desc2.putString(cTID('Nm  '), "Flat");
+    desc1.putObject(cTID('Usng'), cTID('Lyr '), desc2);
+    executeAction(cTID('Mk  '), desc1, dialogMode);
+  };
+
+  // Merge Visible
+  function step2(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putBoolean(cTID('Dplc'), true);
+    executeAction(sTID('mergeVisible'), desc1, dialogMode);
+  };
+
+  // Set
+  function step3(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Chnl'), sTID("selection"));
+    desc1.putReference(cTID('null'), ref1);
+    var ref2 = new ActionReference();
+    ref2.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Trsp'));
+    desc1.putReference(cTID('T   '), ref2);
+    executeAction(cTID('setd'), desc1, dialogMode);
+  };
+
+  // Duplicate
+  function step4(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Chnl'), sTID("selection"));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putString(cTID('Nm  '), "Alpha 1");
+    executeAction(cTID('Dplc'), desc1, dialogMode);
+  };
+
+  // Show
+  function step5(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var list1 = new ActionList();
+    var ref1 = new ActionReference();
+    ref1.putName(cTID('Chnl'), "Alpha 1");
+    list1.putReference(ref1);
+    desc1.putList(cTID('null'), list1);
+    executeAction(cTID('Shw '), desc1, dialogMode);
+  };
+
+  // Delete
+  function step6(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('Dlt '), desc1, dialogMode);
+  };
+
+  // Hide
+  function step7(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var list1 = new ActionList();
+    var ref1 = new ActionReference();
+    ref1.putName(cTID('Chnl'), "Alpha 1");
+    list1.putReference(ref1);
+    desc1.putList(cTID('null'), list1);
+    executeAction(cTID('Hd  '), desc1, dialogMode);
+  };
+
+  // Set
+  function step8(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Chnl'), sTID("selection"));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putEnumerated(cTID('T   '), cTID('Ordn'), cTID('None'));
+    executeAction(cTID('setd'), desc1, dialogMode);
+  };
+
+  step1();      // Make
+  step2();      // Merge Visible
+  step3();      // Set
+  step4();      // Duplicate
+  step5();      // Show
+  step6();      // Delete
+  step7();      // Hide
+  step8();      // Set
+};
+
+// Action to copy all merged (whole document)
+function atnCopyAllMerged() {
+  // Set
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Chnl'), sTID("selection"));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putEnumerated(cTID('T   '), cTID('Ordn'), cTID('Al  '));
+    executeAction(cTID('setd'), desc1, dialogMode);
+  };
+
+  // Copy Merged
+  function step2(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    executeAction(sTID('copyMerged'), undefined, dialogMode);
+  };
+
+  step1();      // Set
+  step2();      // Copy Merged
+};
+
+// Action to copy all (whole document)
+function atnCopyAll() {
+  // Set
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Chnl'), sTID("selection"));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putEnumerated(cTID('T   '), cTID('Ordn'), cTID('Al  '));
+    executeAction(cTID('setd'), desc1, dialogMode);
+  };
+
+  // Copy
+  function step2(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    executeAction(cTID('copy'), undefined, dialogMode);
+  };
+
+  step1();      // Set
+  step2();      // Copy
+};
+
+// Action to select red channel and paste from clipboard
+function atnPasteToRedChannel() {
+  // Select
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Rd  '));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  step1();      // Select
+  atnPasteInPlace();      // Paste
+};
+
+// Action to select green channel and paste from clipboard
+function atnPasteToGreenChannel() {
+  // Select
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Grn '));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  step1();      // Select
+  atnPasteInPlace();      // Paste
+};
+
+// Action to select blue channel and paste from clipboard
+function atnPasteToBlueChannel() {
+  // Select
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Bl  '));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  step1();      // Select
+  atnPasteInPlace();      // Paste
+};
+
+// Action to convert document to grayscale
+function atnGrayscale() {
+  // Convert Mode
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putClass(cTID('T   '), cTID('Grys'));
+    executeAction(sTID('convertMode'), desc1, dialogMode);
+  };
+
+  step1();
+};
+
+// Action to make a new document from current state
+function atnMakeDocumentFromCurrentLayer() {
+  // Make
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putClass(cTID('Dcmn'));
+    desc1.putReference(cTID('null'), ref1);
+    var ref2 = new ActionReference();
+    ref2.putProperty(cTID('HstS'), cTID('CrnH'));
+    desc1.putReference(cTID('Usng'), ref2);
+    executeAction(cTID('Mk  '), desc1, dialogMode);
+  };
+  step1();
+};
+
+// Action to isolate the selected layer
+function atnToggleIsolateLayer() {
+  // Script listener dump
+  var idShw = charIDToTypeID( "Shw " );
+    var desc49 = new ActionDescriptor();
+    var idnull = charIDToTypeID( "null" );
+        var list26 = new ActionList();
+            var ref44 = new ActionReference();
+            var idLyr = charIDToTypeID( "Lyr " );
+            var idOrdn = charIDToTypeID( "Ordn" );
+            var idTrgt = charIDToTypeID( "Trgt" );
+            ref44.putEnumerated( idLyr, idOrdn, idTrgt );
+        list26.putReference( ref44 );
+    desc49.putList( idnull, list26 );
+    var idTglO = charIDToTypeID( "TglO" );
+    desc49.putBoolean( idTglO, true );
+  executeAction( idShw, desc49, DialogModes.NO );
+}
+
+// Duplicate merged image to new document
+function atnDuplicateMerged() {
+  // Duplicate
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Dcmn'), cTID('Ordn'), cTID('Frst'));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putBoolean(cTID('Mrgd'), true);
+    executeAction(cTID('Dplc'), desc1, dialogMode);
+  };
+  step1();
+};
+
+// Make a layermask from an alpha channel for PNG
+function atnMoveAlphaChannelToLayermask() {
+  // Set
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putProperty(cTID('Chnl'), sTID("selection"));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putEnumerated(cTID('T   '), cTID('Ordn'), cTID('Al  '));
+    executeAction(cTID('setd'), desc1, dialogMode);
+  };
+
+  // Copy
+  function step2(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    executeAction(cTID('copy'), undefined, dialogMode);
+  };
+
+  // Select
+  function step3(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), sTID("RGB"));
+    desc1.putReference(cTID('null'), ref1);
+    desc1.putBoolean(cTID('MkVs'), false);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  // Make
+  function step4(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putClass(cTID('Nw  '), cTID('Chnl'));
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Msk '));
+    desc1.putReference(cTID('At  '), ref1);
+    desc1.putEnumerated(cTID('Usng'), cTID('UsrM'), cTID('RvlS'));
+    executeAction(cTID('Mk  '), desc1, dialogMode);
+  };
+
+  // Show
+  function step5(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var list1 = new ActionList();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Ordn'), cTID('Trgt'));
+    list1.putReference(ref1);
+    desc1.putList(cTID('null'), list1);
+    executeAction(cTID('Shw '), desc1, dialogMode);
+  };
+
+  // Paste
+  function step6(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    desc1.putEnumerated(cTID('AntA'), cTID('Annt'), cTID('Anno'));
+    executeAction(cTID('past'), desc1, dialogMode);
+  };
+
+  // Select
+  function step7(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), sTID("RGB"));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  step1();      // Set
+  step2();      // Copy
+  step3();      // Select
+  step4();      // Make
+  step5();      // Show
+  step6();      // Paste
+  step7();      // Select
+};
+
+// Action to reverse Green and Red (Inverse Normal Map)
+function atnInvertRedGreen() {
+  // Select
+  function step1(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Rd  '));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  // Invert
+  function step2(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    executeAction(cTID('Invr'), undefined, dialogMode);
+  };
+
+  // Select
+  function step3(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), cTID('Grn '));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  // Invert
+  function step4(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    executeAction(cTID('Invr'), undefined, dialogMode);
+  };
+
+  // Select
+  function step5(enabled, withDialog) {
+    if (enabled != undefined && !enabled)
+      return;
+    var dialogMode = (withDialog ? DialogModes.ALL : DialogModes.NO);
+    var desc1 = new ActionDescriptor();
+    var ref1 = new ActionReference();
+    ref1.putEnumerated(cTID('Chnl'), cTID('Chnl'), sTID("RGB"));
+    desc1.putReference(cTID('null'), ref1);
+    executeAction(cTID('slct'), desc1, dialogMode);
+  };
+
+  step1();      // Select
+  step2();      // Invert
+  step3();      // Select
+  step4();      // Invert
+  step5();      // Select
+};

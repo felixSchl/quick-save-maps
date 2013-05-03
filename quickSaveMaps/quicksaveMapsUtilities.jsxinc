@@ -1,0 +1,2025 @@
+///////////////////////////////////////////////////////////////////////////////////////
+//
+//  Author:  Felix Schlitter
+//  Contact: felixSchlitter@gmail.com
+//  Website: www.felixSchlitter.com
+//	License: Creative Commons Attribution-ShareAlike 3.0 Unported
+//
+///////////////////////////////////////////////////////////////////////////////////////
+
+// DEVELOPMENT ONLY
+$.level = 0;
+var DEBUG = 0;
+
+/////////////////////////////////////////////////////////////////////
+//// MAGIC NUMBERS AND STRING LITERALS
+/////////////////////////////////////////////////////////////////////
+
+var VERSION = '0.6.4';
+var SCRIPTPATH = getSourcePath();
+var APPDATA = Folder.userData+'/QuickSaveMaps/';
+var MAINCFGPATH = APPDATA+"config.cfg";
+var MAINCFGPATH_ORIGINAL = SCRIPTPATH+"factory.cfg";
+var PSDPROPERTY = 'author';
+var QSMINIPATH  = APPDATA+"qsm.ini";
+var LOGPATH  = APPDATA+"qsmlog.log";
+var QSMINIPATH_ORIGINAL  = SCRIPTPATH+"qsm.ini";
+var DDSPROFILESPATH = APPDATA+"dds/";
+var NVDXTPATH = SCRIPTPATH + "nvdxt.exe";
+var ISWINDOWS = $.os.match(/windows/i);
+var NOTAVAILMACMSG = 'This functionality is not available under Mac OSX';
+var DOCOPEN = true;
+var TEMPDOCNAME = "qsm-compose-temp";
+
+try {
+  var AD = app.activeDocument;
+} catch(e) {
+  DOCOPEN = false;
+}
+
+// Some convenience accesses
+gClassActionSet = charIDToTypeID( 'ASet' );
+gClassAction = charIDToTypeID( 'Actn' );
+gKeyName = charIDToTypeID( 'Nm  ' );
+gKeyNumberOfChildren = charIDToTypeID( 'NmbC' );
+
+// Get version number as integral type
+var strVersion = app.version;
+var strMajor = strVersion.match(/^[0-9]+\./gi);
+var PSVERSION = Number(strMajor);
+
+/////////////////////////////////////////////////////////////////////
+//// HELPER FUNCTIONS
+/////////////////////////////////////////////////////////////////////
+
+// Helper function to make sure CFG and INI are in the right places
+function ensure_config() {
+  // Check folder first
+  var cfgFolder = new Folder(APPDATA);
+  if (!cfgFolder.exists) {
+    cfgFolder.create();
+  }
+  
+  var dpfFolder = new Folder(DDSPROFILESPATH);
+  if (!dpfFolder.exists) {
+    dpfFolder.create();
+  }
+  
+  // Check Config File
+  var cfgFile = new File(MAINCFGPATH);
+  if (!cfgFile.exists) {
+    var cfgFile_original = new File(MAINCFGPATH_ORIGINAL);
+    cfgFile_original.copy(cfgFile);
+    //alert(cfgFile);
+  }
+  // Check INI file
+  var iniFile = new File(QSMINIPATH);
+  if (!iniFile.exists) {
+    var iniFile_original = new File(QSMINIPATH_ORIGINAL);
+    iniFile_original.copy(iniFile);
+  }
+}
+  
+// Helper function to sanitize filenames since PS CS5 regex is buggy (whitespaces and escaping)
+function checkName(x) {
+  x = x.replace(/\*/g, "")      // delete *
+  x = x.replace(/\</g, "")      // delete <
+  x = x.replace(/\>/g, "")      // delete >
+  x = x.replace(/\"/g, "")      // delete "
+  x = x.replace(/\\/g, "")      // delete \ 
+  x = x.replace(/\//g, "")      // delete /
+  x = x.replace(/\:/g, "")      // delete :
+  x = x.replace(/\?/g, "")      // delete ?
+  x = x.replace(/\|/g, "")      // delete |
+  return x;
+}
+
+// Helper function to allow only valid file paths
+function checkPath(x) {
+  x = x.replace(/\*/g, "")      // delete *
+  x = x.replace(/\</g, "")      // delete <
+  x = x.replace(/\>/g, "")      // delete >
+  x = x.replace(/\"/g, "")      // delete "
+  x = x.replace(/\?/g, "")      // delete ?
+  x = x.replace(/\|/g, "")      // delete |
+  return x;
+}
+  
+// Helper function for script listener dumps
+function cTID(s){return charIDToTypeID(s)}
+function sTID(s){return stringIDToTypeID(s)}
+
+// STRING Helper function to repeat a string
+String.prototype.repeat = function( num ) {
+  return new Array( num + 1 ).join( this );
+}
+
+// STRING Helper function to capitalize a string
+String.prototype.capitalize = function() {
+  return this.charAt(0).toUpperCase() + this.slice(1);
+}
+
+// STRING Helper function to remove leading and trailing whitespaces
+function trim(s) {
+	s = s.replace(/(^\s*)|(\s*$)/gi,"");
+	//s = s.replace(/[ ]{2,}/gi," ");
+	s = s.replace(/\n /,"\n");
+	return s;
+}
+
+// Helper function to get the path to the script
+function getSourcePath() {
+	try {
+		return $.fileName.substring(0, $.fileName.lastIndexOf("/")+1);
+	} catch(e) {}
+}
+
+/////////////////////////////////////////////////////////////////////
+//// ENUMERATED TYPES
+/////////////////////////////////////////////////////////////////////
+
+// Enum container
+function Enums() {
+   throw Error.notImplemented();
+}
+
+// Format Enum
+Enums.formats = {
+  DEFAULT : {id: 0, keyname: 'DEFAULT', extension: undefined, nicename: 'Default', alpha: undefined},
+  PNG :  {id: 1, keyname: 'PNG', extension: 'png', nicename: 'PNG', alpha: true},
+  JPG :  {id: 2, keyname: 'JPG', extension: 'jpg', nicename: 'JPG', alpha: false},
+  TGA :  {id: 3, keyname: 'TGA', extension: 'tga', nicename: 'TGA', alpha: true},
+  DDS :  {id: 4, keyname: 'DDS', extension: 'tga', nicename: 'D3D/DDS', alpha: true}, // uses tga extension, will then be converted from tga to dds!
+  CRYTIF :  {id: 5, keyname: 'CRYTIF', extension: 'tif', nicename: 'CRYTIF', alpha: true}, // just to open UI
+}
+
+// Conversions Enum
+Enums.conversions = {
+  NONE : {id: 0, keyname: 'NONE', nicename: 'No Conversion...'},
+  GRAYSCALE : {id: 1, keyname: 'GRAYSCALE', nicename: 'Grayscale'},
+  INVERT_RED_GREEN : {id: 2, keyname: 'INVERT_RED_GREEN', nicename: 'Invert Normals'},
+}
+
+// Resampling Enum
+Enums.resampler = {
+  DEFAULT : {id : 0, keyname : 'DEFAULT', resampleMethod: undefined, nicename : 'Default'},
+  NEAREST_NEIGHBOUR : {id : 1, keyname : 'NEAREST_NEIGHBOUR', resampleMethod: ResampleMethod.NEARESTNEIGHBOR, nicename : 'Nearest Neighbour (preserve hard edges)'},
+  BILINEAR : {id : 2, keyname : 'BILINEAR', resampleMethod: ResampleMethod.BILINEAR, nicename : 'Bilinear'},
+  BICUBIC : {id : 3, keyname : 'BICUBIC', resampleMethod: ResampleMethod.BICUBIC, nicename : 'Bicubic (best for smooth gradients)'},
+  BICUBIC_SMOOTH : {id : 4, keyname : 'BICUBIC_SMOOTH', resampleMethod: ResampleMethod.BICUBICSMOOTHER, nicename : 'Bicubic Smoother (best for enlargement)'},
+  BICUBIC_SHARP : {id : 5, keyname : 'BICUBIC_SHARP', resampleMethod: ResampleMethod.BICUBICSHARPER, nicename : 'Bicubic Sharper (best for reduction)'},
+}
+
+// Tokens Enum
+Enums.argTokens = {
+  PATH : {id: 0, keyname: '$PATH', nicename: 'Path'},
+  PATH_ONLY : {id: 1, keyname: '$PATH_ONLY', nicename: 'Path only'},
+  FILENAME : {id: 2, keyname: '$FILENAME', nicename: 'Filename'},
+  FILENAME_NO_EXT : {id: 3, keyname: '$FILENAME_NO_EXT', nicename: 'Filename without extension'},
+  LAYER_NAME : {id: 4, keyname: '$LAYER_NAME', nicename: 'Layer name'},
+  CONVENTION : {id: 5, keyname: '$CONVENTION', nicename: 'Convention'},
+  FORMAT : {id: 6, keyname: '$FORMAT', nicename: 'Format'},
+  SCALE : {id: 7, keyname: '$SCALE', nicename: 'Scale'},
+  CONVERSION : {id: 8, keyname: '$CONVERSION', nicename: 'Conversion'},
+  BASENAME : {id: 9, keyname: '$BASENAME', nicename: 'Basename'},
+}
+
+// Config Storage Modes
+Enums.storageModes = {
+  CFG : { id: 0 },
+  PSD : { id: 1 },
+  GENERATE : { id: 2 },
+}
+
+// Save Modes
+Enums.saveModes = {
+  SINGLE : { id: 0 },
+  ALL : { id: 1 },
+  INTERFACE : { id: 2 },
+}
+
+
+/////////////////////////////////////////////////////////////////////
+////  CLASSES FOR PREFERENCES
+/////////////////////////////////////////////////////////////////////
+
+// Row Class
+// Represents a Texture Map
+function CRow(xml) {
+  if(!xml) var xml = new XML();
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  // primitives
+  var strName = '';
+  var strConvention = '';
+  var fScale = 1;
+  var strBasename = '';
+  var bScaleIsFixed = false;
+  var fScaleX = 512;
+  var fScaleY = 512;
+  // objects
+  var eResampler = Enums.resampler.NONE;
+  var format = undefined;
+  var processor = undefined;
+  var composeRGB = undefined;
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  
+  // Function to construct the object from XML
+  // Modifies this class's properties
+  this.construct = function(xml) {
+    if (!xml) var xml = new XML();
+    
+    // the name
+    strName = xml.attribute('name').length() ? trim(String(xml.attribute('name'))) : '';
+    
+    // the convention
+    strConvention = xml.attribute('convention').length() ? checkName(trim(String(xml.attribute('convention')))) : '';
+    
+    // the scale
+    fScale = xml.attribute('scale').length() ? Number(trim(String(xml.attribute('scale')))) : 1;
+    if (isNaN(fScale)) {
+      fScale = 1;
+    }
+    
+    // the resampling
+    var token_eResampler = xml.attribute('resampler').length() ? trim(String(xml.attribute('resampler'))).toUpperCase() : '';
+    eResampler = Enums.resampler[token_eResampler] ? Enums.resampler[token_eResampler] : Enums.resampler.DEFAULT;
+    
+    // the scale is fixed?
+    var token_bScaleIsFixed = xml.attribute('scaleIsFixed').length() ? trim(String(xml.attribute('scaleIsFixed'))) : '';
+    bScaleIsFixed = ( token_bScaleIsFixed == 'true' ) ? true : false;
+    
+    // scale X
+    var token_fScaleX = xml.attribute('scaleX').length() ? trim(String(xml.attribute('scaleX'))) : '';
+    fScaleX = ( ( ! isNaN ( Number ( token_fScaleX ) ) ) && ( Number ( token_fScaleX ) > 0 ) ) ? Number ( token_fScaleX ) : 512;
+    
+    // scale Y
+    var token_fScaleY = xml.attribute('scaleY').length() ? trim(String(xml.attribute('scaleY'))) : '';
+    fScaleY = ( ( ! isNaN ( Number ( token_fScaleY ) ) ) && ( Number ( token_fScaleY ) > 0 ) ) ? Number ( token_fScaleY ) : 512;
+    
+    // the basename
+    strBasename = xml.attribute('basename').length() ? checkName(trim(String(xml.attribute('basename')))) : '';
+    
+    // the format
+    format = xml.format ? new CFormat(xml.format) : new CFormat();
+    
+    // the processor
+    processor = xml.processing ? new CProcessor(xml.processing) : new CProcessor();
+    
+    // Compose RGB
+    composeRGB = xml.composeRGB ? new CComposeRGB(xml.composeRGB) : new CComposeRGB();
+  }
+  
+  this.construct(xml);
+  
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setName = function(newName) { 
+    if (newName !== undefined) strName = String(newName);
+  }
+  this.setConvention = function(newConvention) {
+    if (newConvention !== undefined) strConvention = checkName(String(newConvention));
+  }
+  this.setScale = function(newScale) {
+    if (newScale !== undefined && (!isNaN(Number(newScale)))) fScale = clamp(Number(newScale), 0, 1);
+  }
+  this.setIsScaleFixed = function(bool) {
+    bScaleIsFixed = bool;
+  }
+  this.setScaleX = function(newScale) {
+    if ( ( newScale !== undefined ) && ( !isNaN( Number( newScale ) ) ) && ( Number( newScale ) > 0 ) ) fScaleX = Number( newScale );
+  }
+  this.setScaleY = function(newScale) {
+    if ( ( newScale !== undefined ) && ( !isNaN( Number( newScale ) ) ) && ( Number( newScale ) > 0 ) ) fScaleY = Number( newScale );
+  }
+  this.setResampler = function(eNewResampler) {
+    eResampler = eNewResampler;
+  }
+  this.setBasename = function(newBasename) {
+    if (newBasename !== undefined) strBasename = checkName(String(newBasename));
+  }
+  this.setFormat = function(newFormat) {
+    if (newFormat !== undefined) format = newFormat;
+  }
+  this.setProcessor = function(newProcessor) {
+    if (newProcessor !== undefined) processor = newProcessor;
+  }
+  this.setComposeRGB = function(newComposeRGB) {
+    if (newComposeRGB !== undefined) composeRGB = newComposeRGB;
+  }
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getName = function() {return strName;}
+  this.getConvention = function() {return strConvention;}
+  
+  this.getScale = function() {return fScale;}
+  this.getIsScaleFixed = function() {return bScaleIsFixed;}
+  this.getScaleX = function() {return fScaleX;}
+  this.getScaleY = function() {return fScaleY;}
+  
+  this.getBasename = function() {return strBasename;}
+  this.getFormat = function() {return format;}
+  this.getProcessor = function() {return processor;}
+  this.getComposeRGB = function() {return composeRGB;}
+  this.getResampler = function() {return eResampler;}
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to clamp values
+  function clamp(val, min, max){
+    return Math.max(min, Math.min(max, val));
+  }
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var outXML = new XML('<row '+
+      'name = "' + strName + '" '+
+      'convention = "' + strConvention + '" '+
+      'scale = "' + fScale + '" '+
+      'basename = "' + strBasename + '" '+
+      'scaleIsFixed = "' + String( bScaleIsFixed ) + '" '+
+      'scaleX = "' + fScaleX + '" '+
+      'scaleY = "' + fScaleY + '" '+
+      'resampler = "' + eResampler.keyname + '" '+
+    '/>');
+    
+    var formatXML = format.toXML();
+    outXML.appendChild(formatXML);
+    
+    var processingXML = processor.toXML();
+    outXML.appendChild(processingXML);
+    
+    var composeRGBXML = composeRGB.toXML();
+    outXML.appendChild(composeRGBXML);
+    
+    return outXML;
+  }
+  
+}
+
+// Defaults Class
+// Represents the default settings
+function CDefaults(xml) {
+  if(!xml) var xml = new XML();
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+
+  var strBasename = '';
+  var bUseCustomBasename = false;
+  var strPath = '';
+  var bUseCustomPath = false;
+  var bIsRelativePath = false;
+  // objects
+  var eResampler = Enums.resampler.NONE;
+  var format = undefined;
+  var processor = undefined;
+  
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBECT
+  ////////////////////////////////////
+  
+  // Function to constrict the object from XML
+  // Modifies this class's properties
+  this.construct = function(xml) {
+    if (!xml) var xml = new XML();
+    
+    // XML TOKENS
+    // the basename
+    var token_strBasename = xml.attribute('basename').length() ? checkName(trim(String(xml.attribute('basename')))) : '';
+    var token_bUseBasename = xml.attribute('useCustomBasename').length() ? trim(String(xml.attribute('useCustomBasename'))).toLowerCase() : '';
+    var token_strPath = xml.attribute('path').length() ? checkPath(trim(String(xml.attribute('path')))) : '';
+    var token_bUseCustomPath = xml.attribute('useCustomPath').length() ? trim(String(xml.attribute('useCustomPath'))).toLowerCase() : '';
+    var token_bIsRelativePath = xml.attribute('isRelativePath').length() ? trim(String(xml.attribute('isRelativePath'))).toLowerCase() : '';
+    var token_eResampler = xml.attribute('resampler').length() ? trim(String(xml.attribute('resampler'))).toUpperCase() : '';
+    
+    strBasename = token_strBasename;
+    bUseCustomBasename = (token_bUseBasename == 'true') ? true : false;
+    strPath = token_strPath;
+    bUseCustomPath = (token_bUseCustomPath == 'true') ? true : false;
+    bIsRelativePath = (token_bIsRelativePath == 'true') ? true : false;
+    eResampler = Enums.resampler[token_eResampler] ? Enums.resampler[token_eResampler] : Enums.resampler.BICUBIC;
+    format = xml.format ? new CFormat(xml.format) : new CFormat();
+    processor = xml.processing ? new CProcessor(xml.processing) : new CProcessor();
+    
+    // Do not allow "DEFAULT" format!
+    if (format.getFormatInUse() == Enums.formats.DEFAULT) {
+      format.setFormatInUse(Enums.formats.PNG);
+    }
+  }
+  
+  this.construct(xml);
+  
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setUseCustomBasename = function(bool) {
+    if (bool !== undefined) bUseCustomBasename = bool;
+  }
+  this.setPath = function(strNewPath) {
+    if (strNewPath !== undefined) strPath = checkPath(strNewPath);
+  }
+  this.setUseCustomPath = function(bool) {
+    if (bool !== undefined) bUseCustomPath = bool;
+  }
+  this.setIsRelativePath = function(bool) {
+    if (bool !== undefined) bIsRelativePath = bool;
+  }
+  this.setResampler = function(eNewResampler) {
+    eResampler = eNewResampler;
+  }
+  this.setBasename = function(newBasename) {
+    if (newBasename !== undefined) strBasename = checkName(String(newBasename));
+  }
+  this.setFormat = function(newFormat) {
+    if (newFormat !== undefined) format = newFormat;
+  }
+  this.setProcessor = function(newProcessor) {
+    if (newProcessor !== undefined) processor = newProcessor;
+  }
+
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getUseCustomBasename = function() {
+    return bUseCustomBasename;
+  }
+  this.getPath = function() {
+    return strPath;
+  }
+  this.getUseCustomPath = function() {
+    return bUseCustomPath;
+  }
+  this.getIsRelativePath = function() {
+    return bIsRelativePath;
+  }
+  this.getResampler = function() {
+    return eResampler;
+  }
+  this.getBasename = function() {
+    return strBasename;
+  }
+  this.getFormat = function() {
+    return format;
+  }
+  this.getProcessor = function() {
+    return processor;
+  }
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTION
+  ////////////////////////////////////
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var outXML = new XML('<defaults '+
+      'basename = "' + strBasename + '" '+
+      'useCustomBasename = "' + String(bUseCustomBasename) + '" '+
+      'path = "' + strPath + '" '+
+      'useCustomPath = "' + String(bUseCustomPath) + '" '+
+      'isRelativePath = "' + String(bIsRelativePath) + '" '+
+      'resampler = "' + eResampler.keyname + '" '+
+    '/>');
+    
+    var formatXML = format.toXML(true);
+    outXML.appendChild(formatXML);
+    
+    var processingXML = processor.toXML();
+    outXML.appendChild(processingXML);
+    
+    return outXML;
+  }
+}
+
+// ComposeRGB Class
+// Represents the Compose RGB options
+function CComposeRGB(xml) {
+  if (!xml) var xml = new XML();
+
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  var bUseComposeRGB = false;
+  var strComposeRedLayer = '';
+  var strComposeGreenLayer = '';
+  var strComposeBlueLayer = '';
+  var bUseLayerRed = false;
+  var bUseLayerGreen = false;
+  var bUseLayerBlue = false;
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  
+  // Function to construct the object from XML
+  // Modifies this class's properties
+  this.construct = function(xml) {
+    if (!xml) var xml = new XML();
+    // Is used?
+    // var token_bUseComposeRGB = xml.attribute('use');
+    // bUseComposeRGB = (token_bUseComposeRGB == 'true') ? true : false;
+    
+    // Red Layer
+    var xmlRedLyr = xml.child('red')[0];
+    if ( xmlRedLyr )
+    { 
+      strComposeRedLayer = xmlRedLyr.attribute('layerName');
+      var token_bUseLayerRed = xmlRedLyr.attribute('use').length() ? trim(String(xmlRedLyr.attribute('use'))) : '';
+      bUseLayerRed = ( token_bUseLayerRed == 'true' ) ? true : false;
+    }
+    
+    // Green Layer
+    var xmlGreenLyr = xml.child('green')[0];
+    if ( xmlGreenLyr )
+    {
+      strComposeGreenLayer = xmlGreenLyr.attribute('layerName');
+      var token_bUseLayerGreen = xmlGreenLyr.attribute('use').length() ? trim(String(xmlGreenLyr.attribute('use'))) : '';
+      bUseLayerGreen = ( token_bUseLayerGreen == 'true' ) ? true : false;
+    }
+    // Blue Layer
+    var xmlBlueLyr = xml.child('blue')[0];
+    if ( xmlBlueLyr )
+    {
+      strComposeBlueLayer = xmlBlueLyr.attribute('layerName');
+      var token_bUseLayerBlue = xmlBlueLyr.attribute('use').length() ? trim(String(xmlBlueLyr.attribute('use'))) : '';
+      bUseLayerBlue = ( token_bUseLayerBlue == 'true' ) ? true : false;
+    }
+    
+    bUseComposeRGB = ( bUseLayerRed || bUseLayerGreen || bUseLayerBlue );
+  }
+  
+  this.construct(xml);
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setIsUsed = function(bool) {
+    bUseComposeRGB = bool;
+  }
+  this.setLayerRed = function(string) {
+    strComposeRedLayer = string;
+  }
+  this.setLayerGreen = function(string) {
+    strComposeGreenLayer = string;
+  }
+  this.setLayerBlue = function(string) {
+    strComposeBlueLayer = string;
+  }
+  this.setIsUsedLayerRed = function(bool) {
+    bUseLayerRed = bool;
+    bUseComposeRGB = ( bUseLayerRed || bUseLayerGreen || bUseLayerBlue );
+  }
+  this.setIsUsedLayerGreen = function(bool) {
+    bUseLayerGreen = bool;
+    bUseComposeRGB = ( bUseLayerRed || bUseLayerGreen || bUseLayerBlue );
+  }
+  this.setIsUsedLayerBlue = function(bool) {
+    bUseLayerBlue = bool;
+    bUseComposeRGB = ( bUseLayerRed || bUseLayerGreen || bUseLayerBlue );
+  }
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+    
+  this.getIsUsed = function() {
+    return bUseComposeRGB;
+  }
+  this.getLayerRed = function() {
+    return strComposeRedLayer;
+  }
+  this.getLayerGreen = function() {
+    return strComposeGreenLayer;
+  }
+  this.getLayerBlue = function() {
+    return strComposeBlueLayer;
+  }
+  this.getIsUsedLayerRed = function() {
+    return bUseLayerRed;
+  }
+  this.getIsUsedLayerGreen = function() {
+    return bUseLayerGreen;
+  }
+  this.getIsUsedLayerBlue = function() {
+    return bUseLayerBlue;
+  }
+  
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var outXML = new XML('<composeRGB '+
+        //'use = "'+ String(bUseComposeRGB) +'" '+
+        '/>');
+    
+    var redXML = new XML('<red '+
+        'layerName = "'+strComposeRedLayer+'" '+
+        'use = "'+bUseLayerRed+'" '+
+        '/>');
+    outXML.appendChild(redXML);
+    
+    var greenXML = new XML('<green '+
+        'layerName = "'+strComposeGreenLayer+'" '+
+        'use = "'+bUseLayerGreen+'" '+
+        '/>');
+    outXML.appendChild(greenXML);
+    
+    var blueXML = new XML('<blue '+
+        'layerName = "'+strComposeBlueLayer+'" '+
+        'use = "'+bUseLayerBlue+'" '+
+        '/>');
+    outXML.appendChild(blueXML);
+    
+    return outXML;
+  }
+}
+
+// Processor Class
+// Represents the Pre- and Postprocessing wrapper
+function CProcessor(xml) {
+  if (!xml) var xml = new XML();
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  
+  var preProcessor = undefined;
+  var postProcessor = undefined;
+  
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  
+  // Function to construct the object from XML
+  // Modifies this class's properties
+  this.construct = function(xml) {
+    if (!xml) var xml = new XML();
+    preProcessor = new CPreProcessor(xml.pre);
+    postProcessor = new CPostProcessor(xml.post);
+  }
+  
+  this.construct(xml);
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getPreProcessor = function() {
+    return preProcessor;
+  }
+  this.getPostProcessor = function() {
+    return postProcessor;
+  }
+
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  this.toXML = function() {
+    var outXML = new XML('<processing />');
+    
+    var preProcessorXML = preProcessor.toXML();
+    outXML.appendChild(preProcessorXML);
+    var postProcessorXML = postProcessor.toXML();
+    outXML.appendChild(postProcessorXML);
+    
+    return outXML;
+  }
+}
+
+// Preprocessor Class
+// Handles Pre Processing Settings
+function CPreProcessor(xmlPre) {
+  if (!xmlPre) var xmlPre = new XML();
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  
+  var actions = [];
+  var bIsUsed = false;
+  
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+
+  // Function to construct the object from XML
+  // Modifies this class's properties
+  this.construct = function(xmlPre) {
+    if (!xmlPre) var xmlPre = new XML();
+    var token_bIsUsed = xmlPre.attribute('use').length() ? trim(String(xmlPre.attribute('use'))).toLowerCase() : '';
+    bIsUsed = (token_bIsUsed == 'true') ? true : false;
+    // Process actions
+    var xmlActions = xmlPre.child("action");
+    for(var i = 0, ii = xmlActions.length(); i < ii; i++ )
+    {
+      var token_strActionSet = trim(String(xmlActions[i].attribute('set')));
+      var token_strAction = trim(String(xmlActions[i].attribute('name')));
+      if (token_strAction && token_strActionSet) { 
+        actions.push({
+          set: token_strActionSet,
+          name: token_strAction,
+        })
+      };
+    }
+  }
+  
+  this.construct(xmlPre);
+
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setIsUsed = function(bool) {
+    bIsUsed = bool;
+  }
+  this.setActions = function(array) {
+    actions = array;
+  }
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getIsUsed = function() {
+    return bIsUsed;
+  }
+  this.getActions = function() {
+    return actions;
+  }
+
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var outXML = new XML('<pre '+
+      'use = "'+ String(bIsUsed) +'" '+
+    '/>');
+    
+    for (var i = 0, ii = actions.length; i < ii; i++) {
+      var action = actions[i];
+      var actionXML = new XML('<action '+
+          'set = "'+action.set+'" '+
+          'name = "'+action.name+'" '+
+          '/>');
+      outXML.appendChild(actionXML);
+    }
+    
+    return outXML;
+  }
+}
+
+// Postprocessor Class
+// Handles Post Processing Settings
+function CPostProcessor(xmlPost) {
+  if (!xmlPost) var xmlPost = new XML();
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  // primitives
+  var bIsUsed = false;
+  var bOwnThread = true;
+  var strDropletPath = '';
+  // objects
+  var argumentlist = [];
+
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+    
+  // Function to construct the object from XML
+  // Modifies this class's properties
+  this.construct = function(xmlPost) {
+    if (!xmlPost) var xmlPost = new XML();
+
+    // pass arguments with PHP notation ($variable)
+    var token_bIsUsed = xmlPost.attribute('use').length() ? trim(String(xmlPost.attribute('use'))).toLowerCase() : '';
+    bIsUsed = (token_bIsUsed == 'true') ? true : false;
+    
+    var token_bOwnThread = xmlPost.attribute('ownThread').length() ? trim(String(xmlPost.attribute('ownThread'))).toLowerCase() : '';
+    bOwnThread = (token_bOwnThread == 'true') ? true : false;
+    
+    var token_strDropletPath = xmlPost.attribute('path').length() ? checkPath(trim(String(xmlPost.attribute('path')))) : '';
+    strDropletPath = token_strDropletPath.length ? token_strDropletPath : '';
+    
+    var token_strArguments = xmlPost.attribute('arguments').length() ? trim(String(xmlPost.attribute('arguments'))) : '';
+    
+    // Allow only $TOKEN,SOMESTRING,$ANOTHER_TOKEN
+    var token_arguments = token_strArguments.split(',');
+    if (token_arguments) {
+      for (var i = 0, ii = token_arguments.length; i < ii; i++) {
+        var trimmed_arg = trim(token_arguments[i]);
+        if (trimmed_arg.length > 0) {
+          argumentlist.push(trimmed_arg);
+        }
+      }
+    }
+  }
+  
+  this.construct(xmlPost);
+  
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setIsUsed = function(bool) {
+    bIsUsed = bool;
+  }
+  this.setUseOwnThread = function(bool) {
+    bOwnThread = bool;
+  }
+  this.setArguments = function(array) {
+    argumentlist = array;
+  }
+  this.setDropletPath = function(string) {
+    if (!(string === undefined)) strDropletPath = checkPath(string);
+  }
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getIsUsed = function() {
+    return bIsUsed;
+  }
+  this.getUseOwnThread = function() {
+    return bOwnThread;
+  }
+  this.getArguments = function() {
+    return argumentlist;
+  }
+  this.getDropletPath = function() {
+    return strDropletPath;
+  }
+
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var token_postprocessor_args = argumentlist ? argumentlist.join(', ') : '';
+
+    var outXML = new XML('<post '+
+      'use = "'+ String(bIsUsed) +'" '+
+      'ownThread = "'+ String(bOwnThread) +'" '+
+      'path = "'+ strDropletPath +'" '+
+      'arguments = "'+ token_postprocessor_args +'" '+
+      '/>');
+    
+    return outXML;
+  }
+}
+
+// File Format Class
+// Handles File Format Settings
+function CFormat(xml) {
+  if(!xml) var xml = new XML();
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  // primitives
+  var bOverride;
+  var bSaveAlpha;
+  var bUseAlphaLayer;
+  var strAlphaLayer;
+  // objects
+  var objFormatTypes = {};
+  var eFormatInUse = Enums.formats.DEFAULT;
+  var eConversion = Enums.conversions.NONE;
+
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  
+  // Function to construct the object from XML
+  // Modifies this class's properties
+  this.construct = function(xmlFormat) {
+    if (!xmlFormat) var xmlFormat = new XML();
+    // Get the tokens from the file, then convert them to objects later
+    var token_bOverride = xmlFormat.attribute('override').length() ? trim(String(xmlFormat.attribute('override'))).toLowerCase() : '';
+    var token_eFormatInUse = xmlFormat.attribute('name').length() ? trim(String(xmlFormat.attribute('name'))).toUpperCase() : '';
+    var token_bSaveAlpha = xmlFormat.attribute('saveAlpha').length() ? trim(String(xmlFormat.attribute('saveAlpha'))).toLowerCase() : '';
+    var token_bUseAlphaLayer = xmlFormat.attribute('useAlphaLayer').length() ? trim(String(xmlFormat.attribute('useAlphaLayer'))).toLowerCase() : '';
+    var token_strAlphaLayer = xmlFormat.attribute('alphaChannelLayer').length() ? trim(String(xmlFormat.attribute('alphaChannelLayer'))) : '';
+    var token_eConversion = xmlFormat.attribute('conversion').length() ? trim(String(xmlFormat.attribute('conversion'))).toUpperCase() : '';
+    
+    // Make sense of main tokens:
+    bOverride = (token_bOverride.toLowerCase() == 'true') ? true : false;
+    bSaveAlpha = (token_bSaveAlpha == 'true') ? true : false;
+    bUseAlphaLayer = (token_bUseAlphaLayer == 'true') ? true : false;
+    strAlphaLayer = token_strAlphaLayer.length ? token_strAlphaLayer : '';
+    
+    eFormatInUse = Enums.formats[token_eFormatInUse] ? Enums.formats[token_eFormatInUse] : Enums.formats.DEFAULT;
+    eConversion = Enums.conversions[token_eConversion] ? Enums.conversions[token_eConversion] : Enums.conversions.NONE;
+
+    ///////////////////////////////////
+    // PNG TOKENS /////////////////////
+    ///////////////////////////////////
+    var token_png_b8bitmode = xmlFormat.PNG.attribute('use8bit').length() ? trim(String(xmlFormat.PNG.attribute('use8bit'))) : '';
+    // Make sense of PNG tokens:
+    // Option: 8 bit mode
+    var b8bitmode = false;
+    if (token_png_b8bitmode == 'true') b8bitmode = true;
+    if (token_png_b8bitmode == 'false') b8bitmode = false;
+    // Prepare PNG SaveOptions:
+    objFormatTypes[Enums.formats.PNG.id] = new ExportOptionsSaveForWeb();
+    objFormatTypes[Enums.formats.PNG.id].format = SaveDocumentType.PNG;
+    objFormatTypes[Enums.formats.PNG.id].PNG8 = b8bitmode;
+    
+    ///////////////////////////////////
+    // JPG TOKENS /////////////////////
+    ///////////////////////////////////
+    var token_jpg_intQuality = xmlFormat.JPG.attribute('quality').length() ? trim(String(xmlFormat.JPG.attribute('quality'))) : '';
+    var jpg_intQuality = Number(token_jpg_intQuality);
+    jpg_intQuality = (isNaN(jpg_intQuality) || token_jpg_intQuality == '' ) ? 12 : jpg_intQuality;
+    // Make sense of JPG tokens:
+    objFormatTypes[Enums.formats.JPG.id] = new JPEGSaveOptions();
+    objFormatTypes[Enums.formats.JPG.id].quality = jpg_intQuality;
+    
+    ///////////////////////////////////
+    // TGA TOKENS /////////////////////
+    ///////////////////////////////////
+    var token_tga_eResolution = xmlFormat.TGA.attribute('resolution').length() ? trim(String(xmlFormat.TGA.attribute('resolution'))) : '';
+    var token_tga_bCompressRLE = xmlFormat.TGA.attribute('compressRLE').length() ? trim(String(xmlFormat.TGA.attribute('compressRLE'))) : '';
+    // Make sense of TGA tokens:
+    var tga_bCompressRLE = undefined; // PS defaults
+    if (token_tga_bCompressRLE == 'true') tga_bCompressRLE = true;
+    if (token_tga_bCompressRLE == 'false') tga_bCompressRLE = false; 
+    tga_eResolution = undefined; // PS defaults
+    switch (token_tga_eResolution) {
+      case '16':
+        tga_eResolution = TargaBitsPerPixels.SIXTEEN;
+        break;
+      case '24':
+        tga_eResolution = TargaBitsPerPixels.TWENTYFOUR;
+        break;
+      case '32':
+        tga_eResolution = TargaBitsPerPixels.THIRTYTWO;
+        break;
+    }
+    objFormatTypes[Enums.formats.TGA.id] = new TargaSaveOptions();
+    if (tga_bCompressRLE !== undefined) objFormatTypes[Enums.formats.TGA.id].rleCompression = tga_bCompressRLE;
+    if (tga_eResolution !== undefined) objFormatTypes[Enums.formats.TGA.id].resolution = tga_eResolution;
+    
+    ///////////////////////////////////
+    // DDS TOKENS /////////////////////
+    ///////////////////////////////////
+    var token_dds_strProfile = xmlFormat.DDS.attribute('profile').length() ? trim(String(xmlFormat.DDS.attribute('profile'))) : '';
+    var token_dds_bOwnThread = xmlFormat.DDS.attribute('ownThread').length() ? trim(String(xmlFormat.DDS.attribute('ownThread'))) : '';
+    var dds_bOwnThread = ( token_dds_bOwnThread == 'true' ) ? true : false;
+    objFormatTypes[Enums.formats.DDS.id] = {
+      profile: token_dds_strProfile,
+      ownThread: dds_bOwnThread,
+    };
+  }
+  
+  this.construct(xml);
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getSaveOptions = function(format) {
+    if (format) {
+      return (objFormatTypes[format.id]);
+    } else {
+      if (eFormatInUse.id != Enums.formats.DEFAULT.id) {
+        return objFormatTypes[eFormatInUse.id];
+      } else {
+        return undefined;
+      }
+    }
+  }  
+  this.isUsedAsOverride = function() {
+    return bOverride;
+  }
+  this.isUsedAlpha = function() {
+    return bSaveAlpha;
+  }
+  this.isUsedAlphaLayer = function() {
+    return bUseAlphaLayer;
+  }
+  this.getAlphaLayer = function() {
+    return strAlphaLayer;
+  }
+  this.getExtension = function() {
+    return strExtension;
+  }
+  this.getFormatInUse = function() {
+    return eFormatInUse;
+  }
+  this.getConversion = function() {
+    return eConversion;
+  }
+
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setFormatInUse = function(newFormat) {
+    eFormatInUse = newFormat;
+  }
+  this.setConversion = function(newConversion) {
+    eConversion = newConversion;
+  }
+  this.setIsUsedAlpha = function(bool) {
+    bSaveAlpha = bool;
+  }  
+  this.setIsUsedAlphaLayer = function(bool) {
+    bUseAlphaLayer = bool;
+  }
+  this.setAlphaLayer = function(strNewLayerName) {
+    strAlphaLayer = strNewLayerName;
+  }
+  
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output xml
+  this.toXML = function(bBuildForDefaults) {
+    if (bBuildForDefaults === undefined) var bBuildForDefaults = false;
+    
+    if (!bBuildForDefaults) {
+      // Standard XML for a format
+      var outXML = new XML('<format '+
+        'override = "' + String(bOverride) + '" '+
+        'name = "' + eFormatInUse.keyname + '" '+
+        'conversion = "' + eConversion.keyname + '" '+
+        'useAlphaLayer = "' + String(bUseAlphaLayer) + '" '+
+        'alphaChannelLayer = "' + strAlphaLayer + '" '+
+        'saveAlpha = "' + String(bSaveAlpha) + '" '+
+        '/>');
+    } 
+    else {
+      // Minimized version if we are assembling for the defaults
+      var outXML = new XML('<format '+
+        'name = "' + eFormatInUse.keyname + '" '+
+        'saveAlpha = "' + String(bSaveAlpha) + '" '+
+        '/>');
+    }
+    
+    // Prepare PNG XML
+    var png_saveopts = this.getSaveOptions(Enums.formats.PNG);
+    var token_png_use8bot = String(png_saveopts.PNG8);
+    
+    outXML.appendChild (new XML('<PNG '+
+      'use8bit="'+ token_png_use8bot +'" '+
+      '/>'));
+    
+    // Prepare JPG XML
+    var jpg_saveopts = this.getSaveOptions(Enums.formats.JPG);
+    var token_jpg_quality = String(jpg_saveopts.quality);
+    
+    outXML.appendChild (new XML('<JPG '+
+      'quality="'+ token_jpg_quality +'" '+
+      '/>'));
+    
+    // Prepare TGA XML
+    var tga_saveopts = this.getSaveOptions(Enums.formats.TGA);
+    var token_tga_compressRLE = String(tga_saveopts.rleCompression) ? String(tga_saveopts.rleCompression) : '';
+    var token_tga_resolution = '';
+    
+    switch(tga_saveopts.resolution) {
+      case TargaBitsPerPixels.SIXTEEN:
+        token_tga_resolution = '16';
+        break;
+      case TargaBitsPerPixels.TWENTYFOUR:
+        token_tga_resolution = '24';
+        break;
+      case TargaBitsPerPixels.THIRTYTWO:
+        token_tga_resolution = '32';
+        break;
+    }
+    
+    outXML.appendChild (new XML('<TGA '+
+      'resolution="'+ token_tga_resolution +'" '+
+      'compressRLE="'+ token_tga_compressRLE +'" '+
+      '/>'));
+    
+    // Prepare DDS XML
+    var dds_saveopts = this.getSaveOptions(Enums.formats.DDS);
+    var token_dds_profile = String(dds_saveopts.profile) ? String(dds_saveopts.profile) : '';
+    var token_dds_ownThread = String(dds_saveopts.ownThread) ? String(dds_saveopts.ownThread) : true;
+    outXML.appendChild (new XML('<DDS '+
+      'profile="'+ token_dds_profile +'" '+
+      'ownThread="'+ token_dds_ownThread +'" '+
+      '/>'));
+    
+    return outXML;
+  }
+}
+
+// Preferences Class
+// This class is used for easier access to all preferences
+function CPreferences(defaults, rows) {
+  // Initiate variables
+  this.defaults = defaults;
+  this.rows = rows;
+  
+  // Read QSM preferences
+  this.qsmPrefs = new CQSMPreferences();
+  readQSM(QSMINIPATH, this.qsmPrefs);
+  
+  // Information that does not need to be stored
+  this.session = {
+    bUsePSD : this.qsmPrefs.getEnablePSD(),
+  }
+  
+  // Prepare output XML
+  this.toXML = function() {
+    outXML = new XML('<config />');
+    
+    var defaultsXML = this.defaults.toXML();
+    outXML.appendChild(defaultsXML);
+    
+    // Process Rows
+    for (var i = 0, ii = this.rows.length; i < ii; i++) {
+      var row = this.rows[i];
+      var rowXML = row.toXML();
+      outXML.appendChild(rowXML);
+    }
+    
+    return outXML;
+  }
+}
+
+// QSM preferences Class
+// Handles Settings about QSM itself
+function CQSMPreferences(xml) {
+  if (!xml) var xml = new XML();
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  // primitives
+  var bConfirmationDialogs;
+  var bPSD;
+  var bHideDefaults;
+  var nMapsPerPage = 3;
+  var strPathToDDStool = '';
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  this.construct = function(xml) {
+    if (!xml) var xml = new XML();
+    
+    // Confirm Dialogs?
+    var token_bConfirmationDialogs = xml.attribute('showDialogs').length() ? trim(String(xml.attribute('showDialogs'))) : '';
+    bConfirmationDialogs = (token_bConfirmationDialogs == 'true') ? true : false;
+    
+    // Load From PSD?
+    var token_bPSD = xml.attribute('loadFromPSD').length() ? trim(String(xml.attribute('loadFromPSD'))) : '';
+    bPSD = (token_bPSD == 'true') ? true : false;
+    
+    // Hide Defaults?
+    var token_bHideDefaults = xml.attribute('hideDefaults').length() ? trim(String(xml.attribute('hideDefaults'))) : '';
+    bHideDefaults = (token_bHideDefaults == 'true') ? true : false;
+    
+    strPathToDDStool = xml.attribute('pathToDDStool').length() ? trim(String(xml.attribute('pathToDDStool'))) : '';
+    
+    // Maps per page
+    if ( xml.attribute('mapsPerPage').length() ) 
+    {
+      var token_nMapsPerPage = trim(String(xml.attribute('mapsPerPage')));
+      if ( token_nMapsPerPage )
+      {
+        nMapsPerPage = ( !isNaN( Number( token_nMapsPerPage ) ) ) ? Number( token_nMapsPerPage ) : 3;
+        if ( nMapsPerPage > 9 ) nMapsPerPage = 9;
+        if ( nMapsPerPage < 1 ) nMapsPerPage = 1;
+      }
+    }
+  }
+  
+  this.construct(xml);
+ 
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setEnablePSD = function(bool){
+    bPSD = bool;
+  }
+  this.setHideDefaults = function(bool){
+    bHideDefaults = bool;
+  }
+  this.setEnableConfirmationDialogs = function(bool){
+    bConfirmationDialogs = bool;
+  }
+  this.setMapsPerPage = function(number){
+    nMapsPerPage = number;
+  }
+  this.setPathToDDStool = function(string){
+    strPathToDDStool = string;
+  }
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getEnablePSD = function(){
+    return bPSD;
+  }
+  this.getHideDefaults = function(){
+    return bHideDefaults;
+  }
+  this.getEnableConfirmationDialogs = function(){
+    return bConfirmationDialogs;
+  }
+  this.getMapsPerPage = function(){
+    return nMapsPerPage;
+  }
+  this.getPathToDDStool = function(){
+    return strPathToDDStool;
+  }
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  //Prepare output XML
+  this.toXML = function() {
+    var outXML = new XML('<ini '+
+    'showDialogs = "'+ bConfirmationDialogs +'" '+
+    'loadFromPSD = "'+ bPSD +'" '+
+    'hideDefaults = "'+ bHideDefaults +'" '+
+    'mapsPerPage = "'+ nMapsPerPage +'" '+
+    'pathToDDStool = "'+ strPathToDDStool +'" '+
+    '/>');
+    return outXML;
+  }
+}
+
+
+
+/////////////////////////////////////////////////////////////////////
+//// CLASSES FOR LOGGING
+/////////////////////////////////////////////////////////////////////
+
+// Class to handle the Log
+// Wrapper for the complete log
+function CLog(xml) {
+  if (!xml) var xml = new XML();
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  var entries = undefined;
+  
+
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  
+  this.construct = function(xml) {
+    entries = new Array();
+    if (!xml) var xml = new XML();
+    // Process logs
+    var entriesXML = xml.child("entry");
+    for(var i = 0, ii = entriesXML.length(); i < ii; i++)
+    {
+      entries.push(
+        new CLogEntry(entriesXML[i])
+      );
+    }
+  }
+  
+  this.construct(xml);
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getEntries = function() {
+    return entries;
+  }
+  
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to add a new entry
+  this.addEntry = function(logEntry) {
+    if (logEntry === undefined) {
+      var newLogEntry = new CLogEntry();
+      entries.push(
+        newLogEntry
+      );
+      return newLogEntry;
+    } else {
+      entries.push(
+        logEntry
+      );
+      return true;
+    }
+  }
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var outXML = new XML('<log />');
+    
+    // Process the entries
+    for (var i = 0, ii = entries.length; i < ii; i++) {
+      var entry = entries[i];
+      var entryXML = entry.toXML();
+      outXML.appendChild(entryXML);
+    }
+    
+    // Return the Log XML
+    return outXML;
+  }
+  
+}
+
+// Class to hold a log entry
+// Sums up a complete log entry
+function CLogEntry(xml) {
+  if (!xml) var xml = new XML();
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  var errors = undefined;
+  var properties = undefined;
+  
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBJECT
+  ////////////////////////////////////
+  
+  properties = new CLogProperties(xml.properties)
+  errors = new Array();
+  errorsXML = xml.errors;
+  var errorEntriesXML = errorsXML.child('error');
+  for (var i = 0, ii = errorEntriesXML.length(); i < ii; i++) {
+    var errorEntryXML = errorEntriesXML[i];
+    errors.push(
+      new CLogError(errorEntryXML)
+    );
+  }
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getProperties = function() {
+    return properties;
+  }
+  this.getErrors = function() {
+    return errors;
+  }
+
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output xml
+  this.toXML = function() {
+    var outXML = new XML('<entry />');
+    
+    // Add the Properties XML
+    var propertiesXML = properties.toXML();
+    outXML.appendChild(propertiesXML);
+    
+    // Add the Errors XML
+    var errorsXML = new XML('<errors />');
+    outXML.appendChild(errorsXML);
+
+    for (var i = 0, ii = errors.length; i < ii; i++) {
+      var error = errors[i];
+      var errorXML = error.toXML();
+      errorsXML.appendChild(errorXML);
+    }
+    
+    // Return the Log Entry XML
+    return outXML;
+  }
+  
+  // Function to add an error
+  // If no kwargs are provided, return the new error object
+  // If kwargs are provided, return true if successful and false if not
+  this.addError = function(kwargs) {
+    if (kwargs === undefined) {
+      var newError = new CLogError();
+      errors.push(
+        newError
+      );
+      return newError;
+    }
+    else {
+      if ('name' in kwargs && 'description' in kwargs) {
+        var newError = new CLogError();
+        newError.setName(kwargs.name);
+        newError.setDescription(kwargs.description);
+        errors.push(
+          newError
+        );
+        return true;
+      } else {
+        return false;
+      }
+    }
+  }
+}
+
+// Class to handle Log Entry Properties
+// Gives misc information about a saved map
+function CLogProperties(xml) {
+  if (!xml) var xml = new XML();
+
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  
+  var strLocation = '';
+  var strFileName = '';
+  var strName = '';
+  var imageFile = undefined;
+  var imageFolder = undefined;
+  var strDateSaved = '';
+  var strTimeTaken = '';
+  
+  
+  ////////////////////////////////////
+  // CONTSTRUCT THE OBJECT
+  ////////////////////////////////////
+  strLocation = trim(String(xml.location));
+  strLocation = strLocation ? strLocation : '';
+  
+  strFileName = trim(String(xml.filename));
+  strFileName = strFileName ? strFileName : '';
+  
+  strName = trim(String(xml.name));
+  strName = strName ? strName : '';
+  
+  imageFile = new File(strLocation+'/'+strFileName);
+  if (!imageFile.exists) {
+    imageFile = undefined;
+  }
+  imageFolder = new Folder(strLocation);
+  if (!imageFolder.exists) {
+    imageFolder = undefined;
+  }
+  
+  if (imageFile) {
+    var year = imageFile.modified.getUTCFullYear();
+    var month = imageFile.modified.getUTCDate();
+    var day = imageFile.modified.getUTCDay();
+    var hour = imageFile.modified.getUTCHours();
+    var minute = imageFile.modified.getUTCMinutes();
+    strDateSaved = day+'/'+month+'/'+year + ' at ' + hour + ':' + minute;
+  } else {
+    strDateSaved = ' ?';
+  }
+ 
+  strTimeTaken = trim(String(xml.timeTaken));
+  strTimeTaken = strTimeTaken ? strTimeTaken : '';
+  
+  
+  ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getLocation = function() {
+    return strLocation;
+  }
+  this.getFileName = function() {
+    return strFileName;
+  }
+  this.getName = function() {
+    return strName;
+  }
+  this.getImageFile = function() {
+    return imageFile;
+  }
+  this.getImageFolder = function() {
+    return imageFolder;
+  }
+  this.getTimeTaken = function() {
+    return strTimeTaken;
+  }
+  this.getDateSaved = function() {
+    return strDateSaved;
+  }
+
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setName = function(string) {
+    strName = string;
+  }
+  this.setLocation = function(string) {
+    strLocation = string;
+  }
+  this.setFileName = function(string) {
+    strFileName = string;
+  }
+  this.setTimeTaken = function(string) {
+    strTimeTaken = string;
+  }
+
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output string
+  this.toXML = function() {
+    var outXML = new XML('<properties />');
+    
+    // name
+    var nameXML = new XML('<name />');
+    nameXML.appendChild(strName);
+    outXML.appendChild(nameXML);
+    
+    // location
+    var locationXML = new XML('<location />');
+    locationXML.appendChild(strLocation);
+    outXML.appendChild(locationXML);
+    
+    // file name
+    var filenameXML = new XML('<filename />');
+    filenameXML.appendChild(strFileName);
+    outXML.appendChild(filenameXML);
+    
+    // time taken
+    var timeTakenXML = new XML('<timeTaken />');
+    timeTakenXML.appendChild(strTimeTaken);
+    outXML.appendChild(timeTakenXML);
+    
+    // Return the Log Properties XML
+    return outXML;
+  }
+}
+
+// Class to handle a Log Entry Error
+function CLogError(xml) {
+  if (!xml) var xml = new XML();
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  
+  var strName = '';
+  var strDesc = '';
+  
+  
+  ////////////////////////////////////
+  // CONSTRUCT THE OBECT
+  ////////////////////////////////////
+  
+  strName = trim(String(xml.name));
+  strName = strName ? strName : '';
+  
+  strDesc = trim(String(xml.description));
+  strDesc = strDesc ? strDesc : '';
+  
+ 
+ ////////////////////////////////////
+  // GETTERS
+  ////////////////////////////////////
+  
+  this.getName = function() {
+    return strName;
+  }
+  this.getDescription = function() {
+    return strDesc;
+  }
+
+  
+  ////////////////////////////////////
+  // SETTERS
+  ////////////////////////////////////
+  
+  this.setName = function(string) {
+    strName = string;
+  }
+  this.setDescription = function(string) {
+    strDesc = string;
+  }
+
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to prepare output string
+  this.toXML = function() {
+    var outXML = new XML('<error>');
+
+    var nameXML = new XML('<name />');
+    nameXML.appendChild(strName);
+
+    var descriptionXML = new XML('<description />');
+    descriptionXML.appendChild(strDesc);
+    
+    outXML.appendChild(nameXML);
+    outXML.appendChild(descriptionXML);
+    
+    // Return the Log Properties XML
+    return outXML;
+  }
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//// FUNCTIONS FOR READ / WRITE
+/////////////////////////////////////////////////////////////////////
+
+// Function to read a log from file
+// Return false if failed
+function readLog(logPath, log) {
+  file = new File(logPath);
+  
+  if (!file.exists) {
+    // Return false if file does not exist
+    return false;
+  }
+
+  // Read existing log
+  var fileContent = readFileString(file);
+  if (fileContent === false) {
+    fileContent = '';
+  } 
+  
+  // Fill log object
+  var xml = new XML(fileContent);
+  
+  log.construct(xml);
+  
+}
+
+// Function to write a log to file
+// Returns false if failed
+function writeLog(log) {
+  var logFile = new File(LOGPATH);
+  
+  // Try to open the log file
+  try {
+    logFile.open('w');
+  } catch (e) {
+    alert('Could not open log file. Please check your permissions to make use of the logging feature.');
+    return false;
+  }
+  
+  // Write to log file
+  logFile.write(log.toXML().toXMLString());
+  logFile.close();
+}
+
+// Function to retrieve the contents of a file
+// as a string. If file was not found, returns false.
+function readFileString(file) {
+  
+  if (!(file instanceof File)) {
+    // Return false 'file' is not a File object
+    return false;
+  }
+  
+  if (!file.exists) {
+    // Return false if file does not exist
+    return false;
+  }
+  
+  // Try to open the file
+  try {
+    file.open("r");
+  } catch (e) {
+    // Fail silently and return false
+    return false
+  }
+  
+  // Read the file to string and return the string
+  var string = file.read();
+  file.close();
+  return string;
+}
+
+// Function to read in the Config file as XML
+// Modifies the preferences object
+// Returns true if successful and false if not.
+function readPreferences(preferences, storageMode, kwargs) {
+  if (!storageMode) {
+    return false;
+  }
+  
+  var file = undefined;
+  var config = '';
+
+  if (storageMode === Enums.storageModes.CFG) {
+    // Load from file
+    // Return false if 'path' is not present
+    if (! ('path' in kwargs)) {
+      return false;
+    }
+    file = new File(kwargs['path']);
+    // Return false if file does not exist
+    if (! file.exists ) {
+      return false;
+    }
+    try{
+      config = readFileString(file);
+    } catch(e) {
+      // Return false if we do not have access to the file
+      // or something else happened
+      return false;
+    }
+  }
+  else if (storageMode === Enums.storageModes.PSD) {
+    // Load from PSD
+    try{
+      var AD = app.activeDocument;
+      var config = AD.info[kwargs['path']];
+      // Return false if PSD has no config
+      if (!config) {
+        return false;
+      }
+    } catch(e) {
+      // Return false if no document is open
+      return false;
+    }
+  }
+  else if (storageMode === Enums.storageModes.GENERATE) {
+    // Generate empty prefs
+    preferences.rows = new Array();
+    preferences.defaults = new CDefaults();
+  } else {
+    // Return false if storageMode is unkown
+    return false;
+  }
+  
+  // Config XML
+  try {
+    var configXML = new XML(config);
+  } catch(e) {
+    alert('Invalid XML file, more information follow...');
+    alert(e);
+    return false;
+  }
+  
+  // Create defaults
+  var defaults = new CDefaults(configXML.defaults)
+  // Create rows
+  var rows = new Array();
+  var rowsXML = configXML.child('row');
+  for (var i = 0, ii = rowsXML.length(); i < ii; i++) {
+    var rowXML = rowsXML[i];
+    var row = new CRow(rowXML);
+    rows.push(row);
+  }
+  
+  // Modify Preferences
+  preferences.defaults = defaults;
+  preferences.rows = rows;
+  
+  // Return true if everything was successful
+  return true;
+}
+
+// Function to write back to the Config file
+function writePreferences(preferences, storageMode, kwargs) {
+  
+  // Return false if we are missing parameters
+  if (preferences === undefined || storageMode === undefined) {
+    return false;
+  }
+
+  // write ini stuff...
+  writeQSM(QSMINIPATH, preferences.qsmPrefs)
+  // Check for open document if storageMode is PSD
+  if (storageMode == Enums.storageModes.PSD){
+    try{
+      var AD = app.activeDocument;
+    } catch(e) {
+      alert("You need to have a document open in order to save your preferences to PSD.");
+      return false;
+    }
+  }
+  
+  // Get the preferences as XML
+  var outXML = preferences.toXML(); 
+  
+  // Write to CFG
+  if (storageMode == Enums.storageModes.CFG) {
+    // Try to access file that we were told to write to
+
+    // Return false if not given a path
+    if (!('path' in kwargs)) {
+      alert('No File specified to write to!', 'Script Error');
+      return false;
+    }
+    var prefFile = new File(kwargs['path']);
+
+    // Get the existing file content to keep first comment tag
+    var fileContent = '';
+    fileContent = readFileString(prefFile);
+    
+    // Open file in write mode
+    try {
+      prefFile.open("w");
+    } catch (e) {
+      alert('Cannot write to preference file. Check the permissions and re-try.');
+      // Return false if we do not have the rights to write to the file
+      return false;
+    }
+
+    // Look for first comment in file to keep
+    var comment = '';
+    if (fileContent) {
+      var match = fileContent.match(/(<!--[\n\S\s]+-->)(?:[\n\S\s]*)/i);
+      if (match) {
+        comment = match[1]+"\n\n";
+      }
+    }
+    
+    // Write to file
+    try {
+      prefFile.write(comment+outXML.toXMLString());
+    } catch (e) {
+      alert(e)
+    }
+    
+    // Close file
+    prefFile.close();
+    
+    // Return true if we saved CFG successfully
+    return true;
+  }
+  // Write to PSD
+  else if (storageMode == Enums.storageModes.PSD) {
+
+    // Return false if not given a path
+    if (!('path' in kwargs)) {
+      return false;
+    }
+
+    AD.info[kwargs['path']] = outXML.toXMLString();
+    // Return true if we wrote to PSD successfully
+    return true;
+  }
+  // Wrong Mode
+  else {
+    // Return false if no matching mode was found
+    return false;
+  }
+
+}
+
+// Function to read in the ini file
+function readQSM(iniFilePath, qsmPreferences) {
+  
+  // Resolve the file path
+  var iniFile = new File(iniFilePath);
+  
+  // Read in preference file content
+  var ini = readFileString(iniFile);
+  
+  var xml;
+  
+  try {
+    xml = new XML(ini);
+  } catch (e) {
+    xml = new XML();
+  }
+  
+  // Reconstruct qsmPreferences
+  qsmPreferences.construct(xml);
+  
+  // Load from PSD
+  try{
+    var AD = app.activeDocument;
+    var config = AD.info['caption'];
+    if (config !== undefined)
+    {
+      var bPSD = ( config == 'true' ) ? true : false;
+      qsmPreferences.setEnablePSD(bPSD);
+     
+    }
+  } catch(e) {}
+
+}
+
+// Function to write back to the ini file
+function writeQSM(iniFilePath, qsmPreferences) {
+  
+  try{
+    var AD = app.activeDocument;
+    AD.info['caption'] = qsmPreferences.getEnablePSD(); 
+  } catch(e) {}
+  
+  var prefFile = new File(iniFilePath);
+  // Try to open ini file
+  try {
+    prefFile.open("w");
+  } catch(e) { 
+    alert("Could not open ini file. Check your file permissions and retry.");
+    return false;
+  }
+  
+  var outXML = qsmPreferences.toXML();
+
+  // Write preferences to file
+  prefFile.write(outXML.toXMLString());
+
+  prefFile.close();
+  
+  
+}
+
+// Function to search the document recursively for a layerset by name
+function searchChildrenLayerSets(keyword, layerSet) {
+  var layerSets = layerSet.layerSets;
+  keyword = trim(keyword);
+  // Search all layersets under current layerset
+  for (var i=0, ii = layerSets.length; i < ii; i++)
+  {
+    var childLayerSet = layerSets[i];
+    // If any of them equals search string, then return true
+    if (trim(childLayerSet.name) == keyword)
+    {
+      return true;
+    }
+    // If not, search that layerset for possibilities
+    else
+    {
+      if (searchChildrenLayerSets(keyword, childLayerSet)) {
+        return true;
+      }
+
+    }
+  }
+  
+  return false;
+}
+
+// Function to spit out generic error messages about the document state
+function spitDocError(error) {
+  // Identical on Windows and Mac
+  switch(error.number){
+    case 1302:
+      alert("No document selected.");
+      break;
+    case 8103: // WIN
+    case -25920: // MAC
+      alert("Please save the document before running this script.");
+      break;
+    default:
+      alert("An error occured: ");
+      alert(error);
+	}
+}

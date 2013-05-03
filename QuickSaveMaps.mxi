@@ -1,0 +1,23 @@
+<macromedia-extension name="Quick Save Maps" version="0.6.4">
+  <author name="Felix Schlitter" />
+  <description href="http://www.felixschlitter.com/sites/default/files/qsm/quickSaveMapsDescription_open.html">
+    <![CDATA[<meta http-equiv=Content-Type content="text/html;charset=UTF-8">
+      <p style = "font-weight: bold; color: white">Overview:</p>
+      Quick Save Maps allows you to quickly and easily export your texture maps from Photoshop.
+      For more information and help check out <a href="http://www.felixSchlitter.com/node/2" style="color: #FFF; font-weight:bold;">my website</a>.
+      <br />
+    ]]>
+  </description>
+  <products>
+    <product familyname="Photoshop" version="11" />
+  </products>   
+  <ui-access>  
+    <![CDATA[
+      <p style = "font-weight: bold; color: white">Access:</p>
+      You can access the Quick Save Maps tools from the File -&gt; Scripts Menu. It is recommended to install the actions that shipped with the product.
+    ]]>  
+  </ui-access>  
+  <files>
+    <file source="quickSaveMaps" destination="$scripts/" />
+  </files>
+</macromedia-extension>

@@ -1,0 +1,2761 @@
+﻿///////////////////////////////////////////////////////////////////////////////////////
+//
+//  Author:  Felix Schlitter
+//  Contact: felixSchlitter@gmail.com
+//  Website: www.felixSchlitter.com
+//	License: Creative Commons Attribution-ShareAlike 3.0 Unported
+//
+///////////////////////////////////////////////////////////////////////////////////////
+
+#include "quickSaveMaps.jsxinc"
+// (Includes "quickSaveMapsUtilities.jsxinc")
+#include "quickSaveMapsLogging.jsxinc"
+
+/////////////////////////////////////////////////////////////////////
+//// ENTRY
+/////////////////////////////////////////////////////////////////////
+
+// Function to kick off the Quick Save Maps Configuration Dialog
+function launchConfigEditor() {
+
+  // First things first
+  ensure_config();
+  
+  // Create dialog instance to watch progress
+  var dialogState = new CDialogState();
+
+  // Prepare main objects
+  var prefs = new CPreferences();
+  var bPSD = prefs.qsmPrefs.getEnablePSD();
+
+  // Make sure we actually have a document open
+  try {
+    var AD = app.activeDocument;
+  } catch(e) {
+    bPSD = false;
+    prefs.qsmPrefs.setEnablePSD(false);
+  }
+   
+  // Where to load from?
+  // Load from PSD
+  if (bPSD)
+  {
+    if (!readPreferences(prefs, Enums.storageModes.PSD, {path: PSDPROPERTY})) {
+      readPreferences(prefs, Enums.storageModes.GENERATE);
+    }
+  }
+  // Else load from CFG
+  else if (!bPSD)
+  {
+    if (!readPreferences(prefs, Enums.storageModes.CFG, {path: MAINCFGPATH})) {
+      readPreferences(prefs, Enums.storageModes.GENERATE);
+    }
+  }
+  
+  // Create new dialog object
+  var dialog = new CDialog(prefs, dialogState);
+
+  // Main loop
+  do
+  {
+    (function() {
+      return function() {
+        dialog.showLoader();
+        // Add an empty row in case there are no rows
+        if (prefs.rows.length == 0) {
+          prefs.rows.push(new CRow());
+        }
+        dialog.makeDialog();
+      }
+    })()();
+  }
+  while (dialogState.getState() != "__FINISHED__");
+  
+  // Clean up
+  dialog = null;
+  prefs = null;
+  bPSD = null;
+  dialogState = null;
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//// CLASSES
+/////////////////////////////////////////////////////////////////////
+
+// Class to maintain the dialog state
+// Also manages paging of texture maps
+function CDialogState() {  
+  var state;
+  var rows_offset = 0;
+  
+  this.getState = function() {
+    return state;
+  }
+  
+  this.setState = function(newState) {
+    state = newState;
+  }
+  
+  this.getRowsOffset = function() {
+    return rows_offset;
+  }
+  
+  this.setRowsOffset = function(intOffset) {
+    rows_offset = ( intOffset > 0 ) ? intOffset : 0;
+  }
+}
+
+// Class to handle the dialog
+function CDialog(pPrefs, pDialogState) {
+  
+  
+  ////////////////////////////////////
+  // PROPERTIES
+  ////////////////////////////////////
+  
+  var win;
+  var prefs = pPrefs;
+  var dialogState = pDialogState;
+  var diagWidth = 300;
+  var editTextHeight = 18;
+  var dialogFontSize = 11;
+  var bIsDocumentOpen = false;
+  var bIsDocumentSaved = false;
+  var fLoc = {x:0, y:0};
+  
+  var btnSize = [20, 20];
+  var theFontFamily = 'ARIAL';
+  var theFontSize = 11;
+  var normalFont = ScriptUI.newFont( theFontFamily, 'REGULAR', theFontSize );
+  var normalFont12 = ScriptUI.newFont( theFontFamily, 'REGULAR', 12 );
+  var italicFont = ScriptUI.newFont( theFontFamily, 'ITALIC', theFontSize );
+  var boldFont = ScriptUI.newFont( theFontFamily, 'BOLD', theFontSize );
+  var boldFont12 = ScriptUI.newFont( theFontFamily, 'BOLD', 12 );
+  
+  // document state vars
+  try {
+    var AD = app.activeDocument;
+    bIsDocumentOpen = true;
+    var ADname = AD.fullName;
+    bIsDocumentSaved = true;
+  } catch (e) {}
+  
+  // Loading Window
+  // Visual feedback when QSM is loading
+  var loadingWin = new Window('palette', 'Loading');
+  loadingWin.add('statictext', undefined, 'Quick Save Maps is loading, please wait...');
+  loadingWin.add('image', undefined, getSourcePath()+'/images/loader.png');
+  
+  ////////////////////////////////////
+  // MISC. FUNCTIONS
+  ////////////////////////////////////
+  
+  // Function to retrieve the center point of main dialog frame
+  var getMainWinCenter = function() {
+    // Calculate X
+    var offset_x = win.frameLocation.x;
+    var width = win.windowBounds.width;
+    var mid_x = offset_x + (width / 2);
+    
+    // Calculate Y
+    var offset_y = win.frameLocation.y;
+    var height = win.windowBounds.height;
+    var mid_y = offset_y + (height / 2);
+    
+    // Return mid point
+    return {x: mid_x, y: mid_y};
+  };
+  
+  // Function to retrieve center any dialog on main dialog frame
+  var getDialogCenter = function(dialog) {
+    // Return false if no dialog was provided
+    if (dialog === undefined) {
+      return false;
+    }
+    
+    var width = dialog.windowBounds.width;
+    var height = dialog.windowBounds.height;
+    var winCenter = getMainWinCenter();
+
+    // Return mid point
+    return {x: winCenter.x - (width/2), y: winCenter.y - (height/2)};
+  };
+  
+  // Callback: opens a link to website
+  var visitWebsiteFunction = function(name, url) {
+    try {
+      var fname = name + ".url";
+      var shortcut = new File(Folder.temp + '/' + fname);
+      shortcut.open('w');
+      shortcut.writeln('[InternetShortcut]');
+      shortcut.writeln("URL="+url);
+      shortcut.close();
+      shortcut.execute();
+      shortcut.remove();
+    }
+    catch(e)
+    {
+      alert("Could not launch browser. For help visit www.FelixSchlitter.com");
+    }
+  };
+  
+  
+  ////////////////////////////////////
+  // WINDOW CALLBACKS
+  ////////////////////////////////////
+  
+  // Format Windows
+  function editFormatCallback(eFormat, row_id, prefs) {
+    return function() {
+        
+      if (!eFormat) {
+        return;
+      }
+      
+      var row;
+      if (row_id === undefined) {
+        row = prefs.defaults;
+      } else {
+        row = prefs.rows[row_id];
+      }
+      var formatWin = new Window('dialog', 'Format options');
+      formatWin.orientation = 'column';
+      formatWin.onShow = function() {
+        formatWin.frameLocation = getDialogCenter(formatWin);
+      };
+      
+      var grpMain = formatWin.add('group');
+      grpMain.orientation = 'row';
+      
+      // The main panel to house the options
+      var pnlOptions = grpMain.add('panel', undefined, eFormat.nicename+' options');
+      pnlOptions.alignChildren = 'left';
+      pnlOptions.alignment = 'top';
+      pnlOptions.orientation = 'column';
+      pnlOptions.spacing = 0;
+      pnlOptions.margins = [5,15,3,5];
+      
+      // The buttons to leave the dialog
+      var grpMainButtons = grpMain.add('group');
+      grpMainButtons.alignment = 'top';
+      grpMainButtons.alignChildren = 'left';
+      grpMainButtons.orientation = 'column';
+      
+      var btnOK = grpMainButtons.add('button', undefined, 'Accept');
+      btnOK.preferredSize = [100, 22];
+      var btnCancel = grpMainButtons.add('button', undefined, 'Cancel');
+      btnCancel.preferredSize = [100, 22];
+      var btnReset = grpMainButtons.add('button', undefined, 'Reset to default');
+      btnReset.preferredSize = [100, 22];
+      // Get the format options
+      var format = row.getFormat() ? row.getFormat() : new CFormat();
+      var saveoptions = format.getSaveOptions(eFormat);
+
+      // Format Specifics
+      if (eFormat == Enums.formats.PNG) {
+        // PNG WINDOW
+        formatWin.preferredSize = [100, 80];
+        pnlOptions.preferredSize = [100, 80];
+        var bUse8bit = pnlOptions.add('radiobutton', undefined, '8 bits/pixel');
+        var bUse24bit = pnlOptions.add('radiobutton', undefined, '24 bits/pixel');
+        bUse24bit.value = !saveoptions.PNG8;
+        bUse8bit.value  = !bUse24bit.value;
+        btnOK.onClick = ( function( saveoptions ) {
+          return function() {
+            saveoptions.PNG8 = bUse8bit.value;
+            formatWin.close();
+          }
+        } )( saveoptions );
+        btnReset.onClick = function() {
+          var newFormat = new CFormat();
+          bUse8bit.value = newFormat.getSaveOptions(eFormat).PNG8;
+          bUse24bit.value = !bUse8bit.value;
+        }
+      } 
+      else if (eFormat == Enums.formats.JPG) {
+        // JPG WINDOW
+        formatWin.preferredSize = [100, 80];
+        pnlOptions.preferredSize = [100, 100];
+        
+        // generated callback
+        var updateCallback = function(element, determinator) {
+          return function() {
+
+            var intNewQuality;
+            if (determinator.type == 'dropdownlist'){
+              intNewQuality = determinator.selection.index * 4;
+            }
+            else if(determinator.type == 'edittext') {
+              intNewQuality = Number(determinator.text);
+              if (!isNaN(intNewQuality)) {
+                intNewQuality = Math.round(intNewQuality);
+                if (intNewQuality > 12) intNewQuality = 12;
+                if (intNewQuality < 0) intNewQuality = 0;
+              } else {
+                intNewQuality = element['sliderQuality'].value;
+              }
+            }
+            else if(determinator.type == 'slider') {
+              intNewQuality = Math.round(determinator.value);
+            }
+
+            // Propagate changes
+            var tmp_oc_txt = element['grpQuality']['etxtQuality'].onChange;
+            element['grpQuality']['etxtQuality'].onChange = null;
+            var tmp_oc_list = element['grpQuality']['listQuality'].onChange;
+            element['grpQuality']['listQuality'].onChange = null;
+            var tmp_oc_slider = element['sliderQuality'].onChange;
+            element['sliderQuality'].onChange = null;
+            
+            
+            element['grpQuality']['etxtQuality'].text = intNewQuality;
+            element['grpQuality']['listQuality'].selection = Math.round(intNewQuality/4);
+            element['sliderQuality'].value = intNewQuality;
+            
+            
+            element['grpQuality']['etxtQuality'].onChange= tmp_oc_txt;
+            element['grpQuality']['listQuality'].onChange = tmp_oc_list;
+            element['sliderQuality'].onChange = tmp_oc_slider;
+            
+          }
+        };
+        
+        var intQuality = saveoptions.quality;
+
+        var grpQuality = pnlOptions.add('group', undefined, {name: 'grpQuality'});
+        grpQuality.orientation = 'row';
+
+        var txtQuality = grpQuality.add('statictext', undefined, 'Quality:');
+
+        var etxtQuality = grpQuality.add('edittext', undefined, '', {name: 'etxtQuality'});
+        etxtQuality.preferredSize = [30, 20];
+        etxtQuality.text = intQuality;
+
+        var listQuality = grpQuality.add('dropdownlist', undefined, undefined, {name: 'listQuality'});
+
+        listQuality.add('item', 'Low');
+        listQuality.add('item', 'Medium');
+        listQuality.add('item', 'high');
+        listQuality.add('item', 'Maximum');
+
+        listQuality.selection = Math.round(intQuality/4);
+
+        var sliderQuality = pnlOptions.add('slider', undefined, undefined, undefined, undefined, {name: 'sliderQuality'});
+        sliderQuality.minvalue = 0;
+        sliderQuality.maxvalue = 12;
+        sliderQuality.preferredSize = [170, 20];
+        sliderQuality.value = intQuality;
+        
+        // Add the callbacks last
+        etxtQuality.onChange = (function(pnlOptions, etxtQuality) {
+          return updateCallback(pnlOptions, etxtQuality);
+        })(pnlOptions, etxtQuality);
+        listQuality.onChange = (function(pnlOptions, listQuality) {
+          return updateCallback(pnlOptions, listQuality);
+        })(pnlOptions, listQuality);
+        sliderQuality.onChange = (function(pnlOptions, sliderQuality) {
+          return updateCallback(pnlOptions, sliderQuality);
+        })(pnlOptions, sliderQuality);
+        
+        
+        // Read changes back into the prefs object
+        btnOK.onClick = function() {
+          saveoptions.quality = Math.round(sliderQuality.value);
+          formatWin.close();
+        }
+        btnReset.onClick = function() {
+          var newFormat = new CFormat();
+          sliderQuality.value = newFormat.getSaveOptions(eFormat).quality;
+          etxtQuality.text = newFormat.getSaveOptions(eFormat).quality;
+          listQuality.selection = Math.round(newFormat.getSaveOptions(eFormat).quality/4);
+        }
+      }
+      else if (eFormat == Enums.formats.TGA) {
+        // TGA WINDOW
+        formatWin.preferredSize = [140, 80];
+        pnlOptions.preferredSize = [140, 80];
+
+        // Bits per pixel
+        var pnlResolution = pnlOptions.add('panel', undefined, 'Resolution', {name: 'pnlResolution'});
+        var r_1 = pnlResolution.add('radiobutton', undefined, '16 bits/pixel');
+        var r_2 = pnlResolution.add('radiobutton', undefined, '24 bits/pixel');
+        var r_3 = pnlResolution.add('radiobutton', undefined, '32 bits/pixel');
+        
+        switch (saveoptions.resolution) {
+          case TargaBitsPerPixels.SIXTEEN:
+            r_1.value = 1;
+            break;
+          case TargaBitsPerPixels.TWENTYFOUR:
+            r_2.value = 1;
+            break;
+          case TargaBitsPerPixels.THIRTYTWO:
+            r_3.value = 1;
+            break;
+        }
+        // Compress RLE
+        var chkCompressRLE = pnlOptions.add('checkbox', undefined, 'Compress (RLE)', {name: 'chkCompressRLE'});
+        chkCompressRLE.value = saveoptions.rleCompression;
+        
+        btnOK.onClick = function() {
+          if (r_1.value) saveoptions.resolution = TargaBitsPerPixels.SIXTEEN;
+          if (r_2.value) saveoptions.resolution = TargaBitsPerPixels.TWENTYFOUR;
+          if (r_3.value) saveoptions.resolution = TargaBitsPerPixels.THIRTYTWO;
+          saveoptions.rleCompression = chkCompressRLE.value;
+          formatWin.close();
+        }
+        
+        btnReset.onClick = function() {
+          var newFormat = new CFormat();
+          var saveoptions = newFormat.getSaveOptions(eFormat);
+          switch (saveoptions.resolution) {
+          case TargaBitsPerPixels.SIXTEEN:
+            r_1.value = 1;
+            break;
+          case TargaBitsPerPixels.TWENTYFOUR:
+            r_2.value = 1;
+            break;
+          case TargaBitsPerPixels.THIRTYTWO:
+            r_3.value = 1;
+            break;
+          }
+          chkCompressRLE.value = saveoptions.rleCompression
+        }
+      }
+      else if (eFormat == Enums.formats.DDS) {
+        // DDS WINDOW
+        btnReset.enabled = false;
+        btnReset.helpTip = 'Not available for D3D/DDS file format';
+        btnReset.hide();
+        
+        formatWin.preferredSize = [200, 80];
+        pnlOptions.preferredSize = [180, 80];
+        
+        var dpfName = '';
+        var profile_file = new File(saveoptions.profile);
+        
+        var profile_folder = new File(DDSPROFILESPATH);
+        if ( profile_file.exists )
+        {
+          dpfName = profile_file.name;
+          profile_folder = profile_file;
+        }
+        else
+        {
+          dpfName = 'None';
+        }
+        
+        // Currenly loaded:
+        var grpCurrentlyLoaded = pnlOptions.add('group');
+        grpCurrentlyLoaded.orientation = 'column';
+        grpCurrentlyLoaded.alignChildren = 'left';
+        grpCurrentlyLoaded.margins = [10,10,10,10];
+        grpCurrentlyLoaded.add('statictext', undefined, 'Currently Loaded:');
+        var txtCurrentlyLoaded = grpCurrentlyLoaded.add('statictext', undefined, '"'+dpfName+'"');
+        txtCurrentlyLoaded.preferredSize = [150, 20];
+        txtCurrentlyLoaded.graphics.font = ScriptUI.newFont( theFontFamily, 'BOLD', 13 );
+        var grpLoadProfile = pnlOptions.add('group');
+        grpLoadProfile.margins = [5, 10, 5, 5];
+        var btnLoadProfile = grpLoadProfile.add('button', undefined, 'Load Profile');
+        btnLoadProfile.preferredSize = [150, 22];
+        btnLoadProfile.onClick = function() {
+          var chooseFile = profile_folder.openDlg("Load a D3D/DDS profile file", "Profile files:*.dpf");
+          if (!chooseFile) return;
+          txtCurrentlyLoaded.text = '"'+chooseFile.name+'"';
+          profile_file = chooseFile;
+          profile_folder = profile_file;
+        }
+
+        var chkConvertInOwnThread = pnlOptions.add('checkbox', undefined, 'Convert in own thread');
+        chkConvertInOwnThread.value = saveoptions.ownThread;
+        chkConvertInOwnThread.helpTip = 'Default: Off [Use with care]. If turned on you do not have to wait for the conversion to finish before resuming work in Photoshop. However postprocessing actions may depend on the conversion to be finished.';
+        
+        var pnlPathToDDStool = formatWin.add('panel', undefined, 'DDS converter path');
+        pnlPathToDDStool.preferredSize = [250, 50];
+        
+        var grpSetPath = pnlPathToDDStool.add('group');
+        grpSetPath.orientation = 'row';
+        
+        var etxtDDStoolPath = grpSetPath.add('edittext', undefined, '');
+        etxtDDStoolPath.text = prefs.qsmPrefs.getPathToDDStool();
+        etxtDDStoolPath.preferredSize = [230, 22];
+        etxtDDStoolPath.helpTip = 'The converter is part of the DDS Utilities available from the Nvidia website';
+        
+        var btnSetDDStoolPath = grpSetPath.add( 'button', undefined, '...' );
+        btnSetDDStoolPath.preferredSize = [20, 22];
+        btnSetDDStoolPath.onClick = function() {
+          var converterFile = File.openDialog("Path to nvdxt.exe", "Executeable files: *.exe");
+          etxtDDStoolPath.text =  converterFile.fsName;
+        }
+        
+        var btnGetDDStools = pnlPathToDDStool.add('button', undefined, 'Get the DDS utilities from Nvidia');
+        btnGetDDStools.onClick = ( function() {
+        return function() {
+          visitWebsiteFunction( 'DDS-Utilities', "http://developer.nvidia.com/legacy-texture-tools" );
+        }
+      } )(); 
+        
+        btnOK.onClick = function() {
+          saveoptions.profile = profile_file.fsName;
+          saveoptions.ownThread = chkConvertInOwnThread.value;
+          prefs.qsmPrefs.setPathToDDStool( etxtDDStoolPath.text );
+          writeQSM(QSMINIPATH, prefs.qsmPrefs);
+          formatWin.close();
+        }
+        
+      }
+      formatWin.show();
+      formatWin = null;
+      btnOK = null;
+    }
+  };
+  
+  // Confirmation Window
+  var newYouSureWindow = function(message, proceed, prefs, checkbox) {
+    return function() {
+      if (!prefs.qsmPrefs.getEnableConfirmationDialogs()) {
+        proceed.state = true;
+        return;
+      }
+    
+      var youSureWin = new Window('dialog', 'You sure, mate?', undefined, {opacity: 0.8, closeButton: false});
+      youSureWin.alignChildren = 'left';
+      youSureWin.orientation = 'column';
+      youSureWin.preferredSize = [400, 150];
+      youSureWin.onShow = function() {
+        youSureWin.frameLocation = getDialogCenter(youSureWin);
+      };
+      
+      var txtMsg = youSureWin.add('statictext', undefined, message, {multiline : true});
+      txtMsg.preferredSize = [400, 50];
+      txtMsg.orientation = 'fill';
+      youSureWin.add('statictext', undefined, '').preferredSize = [10, 5];
+      var chkBother = youSureWin.add('checkbox', undefined, "Don't bother me again!");
+      chkBother.graphics.font = "dialog: 10";
+      chkBother.preferredSize = [300,20];
+
+      chkBother.alignment = 'left';
+      var grpBtns = youSureWin.add('group');
+      grpBtns.orientation = 'row';
+      grpBtns.alignment = 'center';
+      
+      if (proceed !== undefined){ 
+        var btn_sure_cancel = grpBtns.add('button', undefined, 'Cancel');
+        btn_sure_cancel.active = true;
+        btn_sure_cancel.onClick = function() {
+          proceed.state = false;
+          youSureWin.close();
+        }
+        var btn_sure_ok = grpBtns.add('button', undefined, 'Ok');
+        btn_sure_ok.onClick = function() {
+          proceed.state = true;
+          if (chkBother.value) {
+            prefs.qsmPrefs.setEnableConfirmationDialogs(false);
+          }
+          youSureWin.close();
+        }
+      } else {
+        var btn_sure_ok = grpBtns.add('button', undefined, 'Dismiss');
+        btn_sure_ok.onClick = function() {
+          youSureWin.close();
+        }
+      }
+      youSureWin.show();
+      checkbox.value = prefs.qsmPrefs.getEnableConfirmationDialogs();
+      youSureWin = null;
+      writeQSM(QSMINIPATH, prefs.qsmPrefs);
+    }
+  }
+  
+  // Pre-/Processing Window
+  function newProcessingWindow(row_id, processing_holder, checkbox) {
+      var processwin = new Window('dialog', 'Pre- and Postprocessing');
+      processwin.preferredSize = [240, 200];
+      processwin.onShow = function() {
+        processwin.frameLocation = getDialogCenter(processwin);
+      };
+      
+      // Processing
+      //var processor = processing_holder.properties.processor;
+      var row;
+      if (row_id === undefined) {
+        row = prefs.defaults;
+      } else {
+        row = prefs.rows[row_id];
+      }
+      var processor = row.getProcessor();
+      
+      // PRE PROCESSING
+      var preprocessor = processor.getPreProcessor();
+      var grpPreProcessing = processwin.add('panel', undefined, 'Pre-processing');
+      grpPreProcessing.orientation = 'column';
+      grpPreProcessing.alignChildren = 'left';
+      var chkUsePreProcessing = grpPreProcessing.add('checkbox', undefined, 'Use Pre-Processing actions');
+      chkUsePreProcessing.value = preprocessor.getIsUsed();
+      chkUsePreProcessing.onClick = (function() {
+        return function() {
+          updatePrePro();
+        }
+      })();
+      
+      var grpListRow = grpPreProcessing.add('group', undefined, {name: 'grpListRow'});
+      grpListRow.orientation = 'row';
+      grpListRow.alignChildren = 'top';
+      grpListRow.spacing = 0;
+      grpListRow.margins = [0,0,0,0];
+      
+      var grpList = grpListRow.add('group', undefined, {name: 'grpList'});
+      grpList.spacing = 0;
+      grpList.margins = [0,0,0,0];
+      var listActions = grpList.add( 'listbox', undefined, undefined, {name: 'listActions', multiselect: true} );
+      listActions.preferredSize = [305, 130];
+      listActions.enabled = preprocessor.getIsUsed();
+      var actions = preprocessor.getActions();
+      // Load in saved actions
+      for (var i = 0, ii = actions.length; i < ii; i++) {
+        listActions.add('item', actions[i].name, undefined, {action: actions[i]});
+      }
+      listActions.onChange = (function(grpPreProcessing) {
+        return function() {
+          updatePrePro();
+          //grpPreProcessing['grpListRow']['grpActions']['btnRemoveAction'].enabled = grpPreProcessing['grpListRow']['grpList']['listActions'].selection;
+        }
+      })(grpPreProcessing);
+
+      var grpActions = grpListRow.add('group', undefined, {name: 'grpActions'});
+      grpActions.orientation = 'column';
+      grpActions.alignChildren = 'left';
+      
+      /*
+      // Add action
+      var btnAddAction = grpActions.add('button', undefined, 'Add action', {name: 'btnAddAction'});
+      btnAddAction.preferredSize = [100,20];
+      btnAddAction.enabled = preprocessor.getIsUsed();
+      btnAddAction.onClick = function() {
+        listActions.add('item', dropAction.selection, undefined, {action:{name:dropAction.selection, set:dropActionSet.selection}});
+      }
+      */
+      
+      var imgRemove = ScriptUI.newImage(new File(SCRIPTPATH+'images/remove.png'), new File(SCRIPTPATH+'images/remove_d.png'));
+      //var btnRemoveAction = grpActions.add('button', undefined, 'Remove action', {name: 'btnRemoveAction'});
+      var btnRemoveAction = grpActions.add('iconbutton', undefined, imgRemove, {name: 'btnRemoveAction', style:'toolbutton'});
+      btnRemoveAction.enabled = (preprocessor.getIsUsed() && listActions.selection);
+      btnRemoveAction.onClick = function() {
+        for (var i = 0, ii = listActions.selection.length; i < ii; i++ ) {
+          // delete backwards to not skrew indices
+          var indexRemoved = listActions.selection[ii-1-i].index;
+          listActions.remove(listActions.selection[ii-1-i].index);
+        }
+        listActions.selection = 0;
+        listActions.onChange();
+      }
+
+      
+      var imgUp = ScriptUI.newImage(new File(SCRIPTPATH+'images/up.png'), new File(SCRIPTPATH+'images/up_d.png'));
+      //var btnMoveUp = grpActions.add('button', undefined, 'Move Up', {name: 'btnMoveUp'});
+      var btnMoveUp = grpActions.add('iconbutton', undefined, imgUp, {name: 'btnMoveUp', style:'toolbutton'});
+      btnMoveUp.enabled = preprocessor.getIsUsed();
+      btnMoveUp.onClick = function() {
+        var tmpActions = new Array();
+        var index = listActions.selection[0].index;
+        if (index-1 < 0) return;
+
+        for (var i = 0, ii = listActions.items.length; i < ii; i++) {
+          tmpActions[i] = ({
+            name: listActions.items[i].properties.action.name,
+            set: listActions.items[i].properties.action.set
+          });
+        }
+        
+        var swapAction = {
+          name: tmpActions[index].name,
+          set: tmpActions[index].set,
+        }
+        
+        tmpActions[index] = tmpActions[index-1];
+        tmpActions[index-1] = swapAction;
+        
+        listActions.removeAll();
+        
+        for (var i = 0, ii = tmpActions.length; i < ii; i++) {
+          listActions.add('item', tmpActions[i].name, undefined, {action: tmpActions[i]});
+        }
+        
+        listActions.selection = index-1;
+      }
+      
+      var imgDown = ScriptUI.newImage(new File(SCRIPTPATH+'images/down.png'), new File(SCRIPTPATH+'images/down_d.png'));
+      //var btnMoveDown = grpActions.add('button', undefined, 'Move Down', {name: 'btnMoveDown'});
+      var btnMoveDown = grpActions.add('iconbutton', undefined, imgDown, {name: 'btnMoveDown', style:'toolbutton'});
+      btnMoveDown.enabled = preprocessor.getIsUsed();
+      btnMoveDown.onClick = function() {
+        var tmpActions = new Array();
+        var index = listActions.selection[0].index;
+        if (index+1 > listActions.items.length-1) return;
+
+        for (var i = 0, ii = listActions.items.length; i < ii; i++) {
+          tmpActions[i] = {
+            name: listActions.items[i].properties.action.name,
+            set: listActions.items[i].properties.action.set,
+          };
+        }
+
+        var swapAction = {
+          name: tmpActions[index].name,
+          set: tmpActions[index].set,
+        }
+        
+        tmpActions[index] = tmpActions[index+1];
+        tmpActions[index+1] = swapAction;
+
+        listActions.removeAll();
+        
+        for (var i = 0, ii = tmpActions.length; i < ii; i++) {
+          listActions.add('item', tmpActions[i].name, undefined, {action: tmpActions[i]});
+        }
+        
+        listActions.selection = index+1;
+      }
+      
+      // Select Action Set
+      var grpSelectAction = grpPreProcessing.add('group');
+      grpSelectAction.orientation = 'row';
+      var dropActionSet = grpSelectAction.add('dropdownlist', undefined, undefined, {name: 'dropActionSet'});
+      dropActionSet.enabled = preprocessor.getIsUsed();
+      dropActionSet.preferredSize = [120, 22];
+      var actionInfo = GetActionSetInfo();
+
+      if ( actionInfo.length > 0 ) {
+        for ( var i = 0; i < actionInfo.length; i++ ) {
+          dropActionSet.add( "item", actionInfo[i].name );
+        }
+      }
+      dropActionSet.items[0].selected = true;
+      
+      // Select Action
+      var dropAction = grpSelectAction.add('dropdownlist', undefined, undefined, {name: 'dropAction'});
+      dropAction.enabled = preprocessor.getIsUsed();
+      dropAction.preferredSize = [175, 22];
+      
+      dropActionSet.onChange = function() { 
+        dropAction.removeAll();
+        for ( var i = 0; i < actionInfo[ this.selection.index ].children.length; i++ ) {
+          dropAction.add( "item", actionInfo[ this.selection.index ].children[ i ].name );
+        }
+        if ( dropAction.items.length > 0 ) {
+          dropAction.items[0].selected = true;
+        }
+        dropActionSet.helpTip = dropActionSet.items[ dropActionSet.selection.index ].toString();
+      }
+      dropActionSet.onChange();
+
+      // Add action
+      var imgAdd = ScriptUI.newImage(new File(SCRIPTPATH+'images/add2.png'), new File(SCRIPTPATH+'images/add2_d.png'));
+      var btnAddAction = grpSelectAction.add('iconbutton', undefined, imgAdd, {name: 'btnAddAction', style:'toolbutton'});
+      btnAddAction.preferredSize = btnSize;
+      btnAddAction.enabled = preprocessor.getIsUsed();
+      btnAddAction.onClick = ( function( grpSelectAction ) {
+        return function() {
+          var action = {
+            name: grpSelectAction.dropAction.selection.toString(),
+            set: grpSelectAction.dropActionSet.selection.toString(),
+          };
+          listActions.add('item', grpSelectAction.dropAction.selection, undefined, {action: action});
+        }
+      } )( grpSelectAction );
+      
+      // Update main panel controls
+      var updatePrePro = function() {
+        // List, dropdownlist and some buttons activate directly if checkbox is ticked
+        listActions.enabled = chkUsePreProcessing.value;
+        dropActionSet.enabled = chkUsePreProcessing.value;
+        dropAction.enabled = chkUsePreProcessing.value;
+        btnAddAction.enabled = chkUsePreProcessing.value;
+        
+        // The remove button and move buttons only actives with a proper selection
+        btnRemoveAction.enabled = (chkUsePreProcessing.value && listActions.selection);
+        btnMoveUp.enabled = (chkUsePreProcessing.value && listActions.selection);
+        btnMoveDown.enabled = (chkUsePreProcessing.value && listActions.selection);
+      }
+      
+      // POST PROCESSING
+      var postprocessor = processor.getPostProcessor();
+      
+      var grpPostProcessing = processwin.add('panel', undefined, 'Post-processing');
+      grpPostProcessing.orientation = 'column';
+      grpPostProcessing.alignChildren = 'left';
+      grpPostProcessing.preferredSize = [380, 50];
+      
+
+      var chkUsePostProcessing = grpPostProcessing.add('checkbox', undefined, 'Use Post-Processing droplet');
+      chkUsePostProcessing.value = postprocessor.getIsUsed();
+      chkUsePostProcessing.onClick = (function() {
+        return function() {
+          updatePostPro();
+        }
+      })()
+      
+      if ( ! ISWINDOWS )
+      {
+        chkUsePostProcessing.enabled = false;
+        chkUsePostProcessing.value = false;
+        grpPostProcessing.helpTip = NOTAVAILMACMSG;
+      }
+      
+      var txtDroplet = grpPostProcessing.add('statictext', undefined, 'Droplet:');
+      
+      var grpListRow = grpPostProcessing.add('group', undefined, {name: 'grpListRow'});
+      grpListRow.orientation = 'row';
+      grpListRow.alignChildren = 'top';
+      
+      var etxtDroplet = grpListRow.add('edittext');
+      etxtDroplet.preferredSize = [265, 20];
+      etxtDroplet.text = postprocessor.getDropletPath();
+      
+      var btnDroplet = grpListRow.add('button', undefined, '...');
+      btnDroplet.onClick = function() {
+        var dropletFile = File.openDialog("Select a droplet", "Executeable files: *.exe,Batch files: *.bat,All files: *.*");
+        if (dropletFile) {
+          etxtDroplet.text = dropletFile.fsName;
+        }
+      }
+      btnDroplet.preferredSize = [25, 20];
+      
+      var txtArgs = grpPostProcessing.add('statictext', undefined, 'Arguments:');
+      var etxtArgs = grpPostProcessing.add( 'edittext', undefined, '', {name: 'etxtArgs', multiline: true} );
+      etxtArgs.preferredSize = [300, 50];
+      var args = postprocessor.getArguments();
+
+      etxtArgs.text = args.length ? args.join(', ') : '';
+      
+      var txtTokens = grpPostProcessing.add('statictext', undefined, 'Tokens:');
+      
+      var grpListRow2 = grpPostProcessing.add('group', undefined, {name: 'grpListRow2'});
+      grpListRow2.orientation = 'row';
+      grpListRow2.alignChildren = 'top';
+      grpListRow2.preferredSize = [300, 50];
+      
+      var dropTokens = grpListRow2.add('dropdownlist');
+      for (var i in Enums.argTokens) {
+        dropTokens.add('item', Enums.argTokens[i].nicename, undefined, {argToken : Enums.argTokens[i]});
+      }
+      dropTokens.selection = 0;
+      
+      var btnAddToken = grpListRow2.add('button', undefined, 'Add token');
+      btnAddToken.onClick = function() {
+        var comma = ',';
+        if (trim(etxtArgs.text) == '') {
+          comma = '';
+        }
+        etxtArgs.text += (comma+dropTokens.selection.properties.argToken.keyname);
+      }
+      
+      var chkOwnThrad = grpPostProcessing.add('checkbox', undefined, 'Execute in own thread');
+      chkOwnThrad.helpTip = 'By executing this tool in a seperate thread you will not have to wait until it finishes to pick up work in Photoshop.';
+      chkOwnThrad.value = postprocessor.getUseOwnThread();
+      
+      
+      // Update main panel controls
+      var updatePostPro = function() {
+        etxtDroplet.enabled = chkUsePostProcessing.value;
+        btnDroplet.enabled = chkUsePostProcessing.value;
+        etxtArgs.enabled = chkUsePostProcessing.value;
+        dropTokens.enabled = chkUsePostProcessing.value;
+        btnAddToken.enabled = chkUsePostProcessing.value;
+        txtDroplet.enabled = chkUsePostProcessing.value;
+        txtArgs.enabled = chkUsePostProcessing.value;
+        txtTokens.enabled = chkUsePostProcessing.value;
+        chkOwnThrad.enabled = chkUsePostProcessing.value;
+      }
+      
+      updatePostPro();
+      
+      // Main buttons
+      var grpButtons = processwin.add('group');
+      grpButtons.orientation = 'row';
+      var btnCancel = grpButtons.add('button', undefined, 'Cancel');
+      btnCancel.onClick = function() {
+        var proceed = {state:true};
+        // Switch to normal config mode
+        newYouSureWindow('You are about to close the dialog and forget about all the changes you made, are you absolutely sure?', proceed, prefs, checkbox)();
+        if (proceed.state) {
+          processwin.close();
+        }
+      }
+
+      var btnOk = grpButtons.add('button', undefined, 'Accept');
+      btnOk.onClick = function() {
+        // Update Prefs
+        // Update pre processing
+        var newActions = new Array();
+        for (var i = 0, ii = listActions.items.length; i < ii; i++) {
+          newActions[i] = ({
+            name: String(listActions.items[i].properties.action.name),
+            set: String(listActions.items[i].properties.action.set)
+          });
+        }
+        preprocessor.setActions(newActions);
+        preprocessor.setIsUsed(chkUsePreProcessing.value)
+        
+        // Update post processing
+        postprocessor.setIsUsed(chkUsePostProcessing.value);
+        postprocessor.setUseOwnThread(chkOwnThrad.value)
+        postprocessor.setDropletPath(etxtDroplet.text);
+        var newArgumentList = [];
+        var newArguments = etxtArgs.text.split(',');
+        if (newArguments) {
+          for (var i = 0, ii = newArguments.length; i < ii; i++) {
+            var trimmed_arg = trim(newArguments[i]);
+            if (trimmed_arg.length > 0) {
+              newArgumentList.push(trimmed_arg);
+            }
+          }
+        }
+        postprocessor.setArguments(newArgumentList);
+        
+        //if (PSVERSION >= 11) {
+          if (chkUsePostProcessing.value || chkUsePreProcessing.value) {
+            processing_holder.parent.graphics.backgroundColor = processing_holder.parent.graphics.newBrush( processing_holder.parent.graphics.BrushType.SOLID_COLOR, [0, 1, 0, 0.25] );
+            processing_holder.graphics.font = ScriptUI.newFont ("Arial", "ITALIC", 11);
+          } else {
+            processing_holder.graphics.font = ScriptUI.newFont ("Arial", "REGULAR", 11);
+            processing_holder.parent.graphics.backgroundColor = processing_holder.parent.graphics.newBrush( processing_holder.parent.graphics.BrushType.SOLID_COLOR, [0, 1, 0, 0] );
+          }
+        //}
+        
+        processwin.close();
+      }
+      
+      processwin.show();
+      
+      // Clean up
+      updatePrePro = null;
+      updatePostPro = null;
+      processwin = null;
+  }
+  
+  // About Window
+  var newAboutWindow = function() {
+    return function() {
+      var aboutWin = new Window('dialog', 'About Quick Save Maps');
+      aboutWin.preferredSize = [250, 200];
+      aboutWin.onShow = function() {
+        aboutWin.frameLocation = getDialogCenter(aboutWin);
+      };
+
+      var pnlAbout = aboutWin.add('panel', undefined, 'About:');
+      
+      pnlAbout.add('group').preferredSize = [5,5];
+      var txtAbout = pnlAbout.add('statictext', undefined, ''
+        + "I developed Quick Save Maps in my spare time in order to speed up my texturing workflow. "
+        + "However I found that this tool could very well be of interest to the whole 3D community, so I polished it up "
+        + "for public usage and began maintaining it as a professional tool for the industry."
+        + "",
+        {multiline:true});
+      
+      var imgAbout = pnlAbout.add('image', undefined, getSourcePath()+'/images/qsm-logo.png');
+      var pnlThanks = aboutWin.add('panel', undefined, 'Thanks go out to:');
+      pnlThanks.preferredSize = [220, 25];
+      
+      var imgWeb = ScriptUI.newImage(new File(SCRIPTPATH+'images/web.png'));
+      
+      
+      var grpFelipe = pnlThanks.add('group');
+      grpFelipe.margins = [2, 5, 2, 2];
+      grpFelipe.orientation = 'column';
+      var grpFelipeName = grpFelipe.add('group');
+      grpFelipeName.orientation = 'row';
+      grpFelipeName.add('statictext', undefined, 'Felipe Oliveira Gall').graphics.font = boldFont12;
+      var btnWeb = grpFelipeName.add('iconbutton', undefined, imgWeb, {name: 'btnWeb', style:'toolbutton'});
+      btnWeb.onClick = ( function() {
+        return function() {
+          visitWebsiteFunction('FelipeGall', "http://felipegall.com/");
+        }
+      } )();
+      btnWeb.preferredSize = btnSize;
+      
+      grpFelipe.add('statictext', undefined, ''
+        + 'Ideas and testing for the "channel replacement" feature, DDS support and general useability.'
+        + '',
+        {multiline:true});
+      
+      var btnAboutVisitWebsite = aboutWin.add('button', undefined, 'Visit website');
+      btnAboutVisitWebsite.preferredSize = [150, 25];
+      btnAboutVisitWebsite.onClick = ( function() {
+        return function() {
+          visitWebsiteFunction( 'QSM-Website', "http://www.felixschlitter.com/snippets/quick-save-maps" );
+        }
+      } )(); 
+      
+      var btnAboutClose = aboutWin.add('button', undefined, 'Close');
+      btnAboutClose.preferredSize = [150, 25];
+      btnAboutClose.onClick = function() {
+        aboutWin.close();
+      }
+      
+      // Enter modal state for the About window
+      aboutWin.show();
+      
+      // Clean up after modal state has ended
+      removeAllEvents(aboutWin);
+      aboutWin = null;
+    }
+  }
+  
+  ////////////////////////////////////
+  // MEMBER FUNCTIONS
+  ////////////////////////////////////
+  
+  this.showLoader = function() {
+    loadingWin.show();
+  }
+  
+  this.hideLoader = function() {
+    loadingWin.hide();
+  }
+  
+  this.makeDialog = function() {
+    dialogState.setState('__FINISHED__');
+
+    // Main window
+    win = new Window('dialog', 'QSM version '+VERSION+' - By Felix Schlitter --- www.FelixSchlitter.com', undefined, {resizeable: false});
+    win.graphics.font = ScriptUI.newFont ("Arial", "REGULAR", 12);
+    
+    win.preferredSize = [diagWidth, null];
+    win.alignChildren = 'left';
+    win.orientation = 'column';
+    win.graphics.font = "dialog:"+dialogFontSize;
+    
+    /*
+    if (PSVERSION >= 12) {
+      win.graphics.backgroundColor = win.graphics.newBrush(win.graphics.BrushType.SOLID_COLOR, [0.9, 0.9, 0.9, 1]);
+    }
+    */
+    
+    // Restore frame location
+    try{
+      var desc = app.getCustomOptions(cTID("qsm "));
+      fLoc = {x: desc.getDouble(cTID("FLCX")), y: desc.getDouble(cTID("FLCY"))};
+    } catch(e) { 
+      fLoc = undefined;
+    }
+    // Set frame location
+    if (fLoc !== undefined) {
+      win.frameLocation = fLoc;
+    } else {
+      win.center();
+      fLoc = win.frameLocation;
+    }
+    
+    win.onClose = function() {
+      var desc_out = new ActionDescriptor();
+      desc_out.putDouble(cTID("FLCX"),win.frameLocation[0]);
+      desc_out.putDouble(cTID("FLCY"),win.frameLocation[1]);
+      app.putCustomOptions(cTID("qsm "), desc_out, 1);
+    }
+    
+    var grpTopRow = win.add('group', undefined);
+    grpTopRow.preferredSize = [600, 20];
+    grpTopRow.orientation = 'row';
+    grpTopRow.margins = [0,0,0,0];
+    grpTopRow.spacing = 0;
+    
+    // Defaults
+    var chkHideDefaults = grpTopRow.add('checkbox', undefined, 'Hide defaults');
+    chkHideDefaults.alignment = 'left';
+    chkHideDefaults.value = prefs.qsmPrefs.getHideDefaults();
+    chkHideDefaults.onClick = (function() {
+      return function() {
+        updatePrefs();
+        dialogState.setState('__HIDE_DEFAULTS__');
+        prefs.qsmPrefs.setHideDefaults(chkHideDefaults.value);
+        win.close();
+      }
+    })();
+    
+    var grpTopSpacer = grpTopRow.add('group');
+    grpTopSpacer.preferredSize = [385, 20];
+    grpTopSpacer.alignment = 'right';
+    grpTopSpacer.alignChildren = 'right';
+    grpTopSpacer.margins = [0,0,0,0];
+    grpTopSpacer.spacing = 0;
+    
+    //var btnViewLog = grpTopRow.add('button', undefined, 'View Log');
+    var imgViewLog = ScriptUI.newImage(new File(SCRIPTPATH+'images/log.png'));
+    var btnViewLog = grpTopRow.add('iconbutton', undefined, imgViewLog, {name: 'btnViewLog', style:'toolbutton'});
+    btnViewLog.helpTip = "View information about recently saved maps";
+    btnViewLog.onClick = (function() {
+      return function() {
+        var logDialog = new CLogDialog();
+        var logWin = logDialog.makeDialog(false);
+        logWin.onShow = function() {
+          logWin.frameLocation = getDialogCenter(logWin)
+        };
+        logWin.show();
+      }
+    })();
+    
+    //var btnImport = grpTopRow.add('button', undefined, 'Import');
+    var imgImport = ScriptUI.newImage(new File(SCRIPTPATH+'images/import.png'));
+    var btnImport = grpTopRow.add('iconbutton', undefined, imgImport, {name: 'btnImport', style:'toolbutton'});
+    btnImport.helpTip = "Import settings from another config file";
+    btnImport.alignment = 'right';
+    btnImport.onClick = (function() {
+      return function() {
+        var maincfg_folder = new File(MAINCFGPATH);
+        var chooseFile = maincfg_folder.openDlg("Import from a config file", "Config files:*.cfg");
+        // Check if a file was selected
+        if (!chooseFile) return;
+        var proceed = {state:true};
+        // Switch to normal config mode
+        newYouSureWindow('You are about to import settings from an external file. This will replace your current settings and any unsaved changes you made will be lost. Are you sure you want that?', proceed, prefs, chkConfirmDialogs)();
+        if (proceed.state) {
+          dialogState.setState('__IMPORT__');
+          if (!readPreferences(prefs, Enums.storageModes.CFG, {path: chooseFile})) {
+            if (!readPreferences(prefs, Enums.storageModes.CFG, {path: MAINCFGPATH})) {
+              readPreferences(prefs, Enums.storageModes.GENERATE);
+            }
+          }
+          win.close();
+        }
+      }
+    })();
+    
+    //var btnExport = grpTopRow.add('button', undefined, 'Export');
+    var imgExport = ScriptUI.newImage(new File(SCRIPTPATH+'images/export.png'));
+    var btnExport = grpTopRow.add('iconbutton', undefined, imgExport, {name: 'btnExport', style:'toolbutton'});
+    btnExport.helpTip = "Export settings to an external config file";
+    btnExport.alignment = 'right';
+    btnExport.onClick = (function() {
+      return function() {
+        var maincfg_folder = new File(MAINCFGPATH);
+        var chooseFile = maincfg_folder.saveDlg("Export to a config file", "Config files:*.cfg");
+        // Check if a file was selected
+        if (!chooseFile) return;
+        updatePrefs();
+        if (writePreferences(prefs, Enums.storageModes.CFG, {path : chooseFile})) {
+          alert("Your settings have been successfully exported.");
+        } else {
+          alert("Export failed. Make sure you have access rights to that directory / file.");
+        }
+      }
+    })();
+    
+    //var btnAbout = grpTopRow.add('button', undefined, 'About');
+    var imgAbout = ScriptUI.newImage(new File(SCRIPTPATH+'images/about.png'));
+    var btnAbout = grpTopRow.add('iconbutton', undefined, imgAbout, {name: 'btnAbout', style:'toolbutton'});
+    btnAbout.helpTip = 'About Quick Save Maps';
+    btnAbout.alignment = 'right';
+    btnAbout.onClick = (function(){
+      return newAboutWindow();
+    })()
+    
+    // --- DEFAULTS ---
+    if (!prefs.qsmPrefs.getHideDefaults()) {
+      var pnlDefaults = win.add('panel', undefined, 'Defaults', {name: 'pnlDefaults'});
+      pnlDefaults.orientation = 'row';
+      pnlDefaults.preferredSize = [652, 50];
+      pnlDefaults.alignChildren = ['left', 'top'];
+      pnlDefaults.spacing = 0;
+      pnlDefaults.margins = [3,10,3,3];
+      
+      // grp_defaults_1
+      var grp_defaults_1 = pnlDefaults.add('group');
+      grp_defaults_1.orientation = 'column';
+      grp_defaults_1.alignChildren = 'left';
+      grp_defaults_1.spacing = 0;
+      grp_defaults_1.margins = [3,3,3,3];
+      grp_defaults_1.graphics.font = "dialog:"+dialogFontSize;
+      
+      // Defaults : Basename panel
+      var pnlDefaultsName = grp_defaults_1.add('panel', undefined, 'Basename');
+      pnlDefaultsName.orientation = 'column';
+      pnlDefaultsName.alignChildren = 'left';
+      pnlDefaultsName.graphics.font = "dialog:"+dialogFontSize;
+      pnlDefaultsName.preferredSize = [155, 20];
+      pnlDefaultsName.spacing = 0;
+      pnlDefaultsName.margins = [10,14,10,10];
+      pnlDefaultsName.graphics.font = ScriptUI.newFont ("Arial", "BOLD", 12);
+
+      // Defaults : Use Basename
+      var chkDefaultsUseCustomBasename = pnlDefaultsName.add('checkbox', undefined, 'Custom basename', {name: 'use_default_basename'});
+      chkDefaultsUseCustomBasename.graphics.font = "dialog:"+dialogFontSize;
+      chkDefaultsUseCustomBasename.value = prefs.defaults.getUseCustomBasename();
+      chkDefaultsUseCustomBasename.onClick = (function(pnlDefaultsName) {
+        return function() {
+          pnlDefaultsName['default_basename'].enabled = pnlDefaultsName['use_default_basename'].value;
+        }
+      })(pnlDefaultsName)
+      
+      // Defaults : The custom basename
+      var etxt_defaultsCustomName = pnlDefaultsName.add('edittext', undefined, '', {name: 'default_basename'});
+      etxt_defaultsCustomName.preferredSize = [120, editTextHeight];
+      etxt_defaultsCustomName.graphics.font = "dialog:"+dialogFontSize;
+      etxt_defaultsCustomName.text = prefs.defaults.getBasename();
+      etxt_defaultsCustomName.enabled = chkDefaultsUseCustomBasename.value;
+      etxt_defaultsCustomName.onChange = (function(etxt_defaultsCustomName) {
+        return function() {
+          etxt_defaultsCustomName.text = trim(checkName(etxt_defaultsCustomName.text));
+        }
+      })(etxt_defaultsCustomName);
+      
+      // Side note
+      pnlDefaultsName.add('statictext', undefined, '').preferredSize = [10,20];
+      var txtDefaultsInfoName = pnlDefaultsName.add('statictext', undefined, 'By default, the PSD filename will be used', {multiline: true})
+      txtDefaultsInfoName.preferredSize = [120, 40];
+      txtDefaultsInfoName.graphics.font = ScriptUI.newFont ("Arial", "ITALIC", 10);
+      
+      // grp_defaults_2
+      var grp_defaults_2 = pnlDefaults.add('group');
+      grp_defaults_2.orientation = 'column';
+      grp_defaults_2.alignChildren = 'left';
+      grp_defaults_2.spacing = 0;
+      grp_defaults_2.margins = [3,3,3,3];
+      grp_defaults_2.graphics.font = "dialog:"+dialogFontSize;
+      
+      // Defaults : Path panel
+      var pnlDefaultsPath = grp_defaults_2.add('panel', undefined, 'Path');
+      pnlDefaultsPath.orientation = 'column';
+      pnlDefaultsPath.alignChildren = 'left';
+      pnlDefaultsPath.graphics.font = "dialog:"+dialogFontSize;
+      pnlDefaultsPath.preferredSize = [260, 100];
+      pnlDefaultsPath.spacing = 0;
+      pnlDefaultsPath.margins = [10,14,10,10];
+      pnlDefaultsPath.graphics.font = ScriptUI.newFont ("Arial", "BOLD", 12);
+      
+      // Defaults : Use custom path
+      var chkDefaultsUseCustomPath = pnlDefaultsPath.add('checkbox', undefined, 'Custom path', {name: 'use_custom_path'});
+      chkDefaultsUseCustomPath.graphics.font = "dialog:"+dialogFontSize;
+      chkDefaultsUseCustomPath.value = prefs.defaults.getUseCustomPath();
+      chkDefaultsUseCustomPath.onClick = (function(pnlDefaultsPath) {
+        return function() {
+          pnlDefaultsPath['default_custom_path_grp']['default_custom_path'].enabled = pnlDefaultsPath['use_custom_path'].value;
+          pnlDefaultsPath['default_custom_path_grp']['find_folder'].enabled = pnlDefaultsPath['use_custom_path'].value;
+          pnlDefaultsPath['relative_path'].enabled = pnlDefaultsPath['use_custom_path'].value;
+        }
+      })(pnlDefaultsPath);
+      
+      // The custom path group
+      var grp_defaultsCustomPath = pnlDefaultsPath.add('group', undefined, {name: 'default_custom_path_grp'});
+      grp_defaultsCustomPath.margins = [0,0,0,0];
+      grp_defaultsCustomPath.spacing = 0;
+      
+      // Enter custom path
+      var etxt_defaultsCustomPath = grp_defaultsCustomPath.add('edittext', undefined, prefs.defaults.getPath(), {name : 'default_custom_path'});
+      etxt_defaultsCustomPath.preferredSize = [180, editTextHeight];
+      etxt_defaultsCustomPath.graphics.font = "dialog:"+dialogFontSize;
+      etxt_defaultsCustomPath.enabled = chkDefaultsUseCustomPath.value;
+      etxt_defaultsCustomPath.onChange = (function(etxt_defaultsCustomPath) {
+        return function() {
+          etxt_defaultsCustomPath.text = checkPath(etxt_defaultsCustomPath.text);
+        }
+      })(etxt_defaultsCustomPath);
+      
+      // Defaults : Find folder
+      var btn_defaultsFindFolder = grp_defaultsCustomPath.add('button', undefined, '...', {name : 'find_folder'});
+      btn_defaultsFindFolder.preferredSize = [20, editTextHeight];
+      btn_defaultsFindFolder.enabled = chkDefaultsUseCustomPath.value;
+      btn_defaultsFindFolder.onClick = (function(etxt_defaultsCustomPath){
+        return function() {
+          var customPath = new Folder(etxt_defaultsCustomPath.text);
+          customPath = Folder.selectDialog("", customPath);
+          etxt_defaultsCustomPath.text = customPath.fsName;
+        }
+      })(etxt_defaultsCustomPath);
+      
+      // Defaults : Relative path
+      var chkDefaultsUseRelativePath = pnlDefaultsPath.add('checkbox', undefined, 'Relative to PSD', {name: 'relative_path'});
+      chkDefaultsUseRelativePath.graphics.font = "dialog:"+dialogFontSize;
+      chkDefaultsUseRelativePath.value = prefs.defaults.getIsRelativePath();
+      chkDefaultsUseRelativePath.enabled = chkDefaultsUseCustomPath.value;
+      
+      // Side note
+      pnlDefaultsPath.add('statictext', undefined, '').preferredSize = [10,10];
+      var txtDefaultsInfoPath = pnlDefaultsPath.add('statictext', undefined, 'By default, the PSD file-path will be used', {multiline: true})
+      txtDefaultsInfoPath.graphics.font = ScriptUI.newFont ("Arial", "ITALIC", 10);
+      txtDefaultsInfoPath.preferredSize = [190, 30];
+      
+      // grp_defaults_3
+      var grp_defaults_3 = pnlDefaults.add('group');
+      grp_defaults_3.orientation = 'column';
+      grp_defaults_3.alignChildren = 'left';
+      grp_defaults_3.spacing = 0;
+      grp_defaults_3.margins = [3,3,3,3];
+      grp_defaults_3.graphics.font = "dialog:"+dialogFontSize;
+      
+      // Options panel
+      var pnlDefaultsOptions = grp_defaults_3.add('panel', undefined, 'Common options');
+      pnlDefaultsOptions.orientation = 'column';
+      pnlDefaultsOptions.alignChildren = 'left';
+      pnlDefaultsOptions.graphics.font = "dialog:"+dialogFontSize;
+      pnlDefaultsOptions.preferredSize = [200, 100];
+      pnlDefaultsOptions.spacing = 0;
+      pnlDefaultsOptions.margins = [10,14,10,10];
+      pnlDefaultsOptions.graphics.font = ScriptUI.newFont ("Arial", "BOLD", 12);
+      
+      // default options group
+      var grpDefaultsOptions = pnlDefaultsOptions.add('group');
+      grpDefaultsOptions.graphics.font = "dialog:"+dialogFontSize;
+      grpDefaultsOptions.orientation = 'column';
+      grpDefaultsOptions.alignChildren = 'left';
+      grpDefaultsOptions.spacing = 0;
+      grpDefaultsOptions.margins = [0,0,0,0];
+      
+      // Defaults : Resampling
+      grpDefaultsOptions.add('statictext', undefined, 'Resample Image when resizing: ')
+      var listDefaultsResample = grpDefaultsOptions.add('dropdownlist', undefined);
+      listDefaultsResample.preferredSize = [190, 20];
+      for (var i in Enums.resampler){
+        if ( i == Enums.resampler.DEFAULT.keyname ) continue;
+        listDefaultsResample.add('item', Enums.resampler[i].nicename, undefined, {keyname: Enums.resampler[i].keyname});
+      }
+      listDefaultsResample.selection = ( prefs.defaults.getResampler().id - 1 );
+
+      // Defaults : Title
+      var tmp = grpDefaultsOptions.add('statictext', undefined, 'Default file format: ');
+      tmp.preferredSize = [100,15];
+          
+      // Defaults : Formats
+      var grpDefaultsFormatSuper = grpDefaultsOptions.add('group');
+      grpDefaultsFormatSuper.orientation = 'row';
+      grpDefaultsFormatSuper.spacing = 0;
+      grpDefaultsFormatSuper.margins = [0,5,0,0];
+      grpDefaultsFormatSuper.alignChildren = 'left';
+      
+      // 2nd group, to the left
+      var grpDefaultsFormat = grpDefaultsFormatSuper.add('group', undefined, {name: 'grpDefaultsFormat'});
+      grpDefaultsFormat.orientation = 'column';
+      grpDefaultsFormat.alignChildren = 'left';
+      grpDefaultsFormat.spacing = 0;
+      grpDefaultsFormat.margins = [0,0,0,0];
+      
+      // Defaults : Format list
+      var listFormats = grpDefaultsFormat.add('dropdownlist', undefined, undefined, {name : 'listFormats'})
+      listFormats.preferredSize = [85, editTextHeight+2];
+      for (x in Enums.formats) {
+        if (Enums.formats[x].id == Enums.formats.DEFAULT.id ) continue;
+        listFormats.add('item', Enums.formats[x].nicename, undefined, {keyname: Enums.formats[x].keyname});
+      }
+      listFormats.selection = prefs.defaults.getFormat().getFormatInUse().id - 1;
+      
+      listFormats.onChange = (function(element, newCallback) {
+        return function() {
+          var list = element['grpDefaultsFormat']['listFormats'];
+          var index = list.selection.index;
+          var keyname = list.items[index].properties.keyname;
+          var format = Enums.formats[keyname];
+          switch(keyname) {
+            case Enums.formats.JPG.keyname:
+              element['grpDefaultsAlpha']['saveAlpha'].enabled = false;
+              break;
+            default:
+              element['grpDefaultsAlpha']['saveAlpha'].enabled = true;
+              break;
+          }
+          
+          // Don't allow DDS on MAC
+          if ( ! ISWINDOWS ) {
+            if ( format == Enums.formats.DDS )
+            {
+              alert(NOTAVAILMACMSG);
+              list.selection = 0;
+              index = list.selection.index;
+              keyname = list.items[index].properties.keyname;
+              format = Enums.formats[keyname];
+            }
+          }
+
+          element['grpDefaultsFormat']['editFormat'].onClick = (function(format){
+            return newCallback(format, undefined);
+          })(format);
+        }
+      })(grpDefaultsFormatSuper, editFormatCallback);
+      
+      // Defaults : Edit format
+      var btnEditFormat = grpDefaultsFormat.add('button', undefined, 'Format settings', {name: 'editFormat'});
+      btnEditFormat.preferredSize = [85, editTextHeight+2];
+      btnEditFormat.onClick = (function(listFormats){
+        return function() {
+          var index = listFormats.selection.index;
+          alert(index)
+          var keyname = listFormats.items[index].properties.keyname;
+          var format = Enums.formats[keyname];
+          return editFormatCallback(format, undefined, prefs); // send format and 'undefined' as row_id
+        }
+      })(listFormats); // send dropdown list
+      
+      // Defaults : Alpha and processing
+      var grpDefaultsAlpha = grpDefaultsFormatSuper.add('group', undefined, {name: 'grpDefaultsAlpha'});
+      grpDefaultsAlpha.orientation = 'column';
+      grpDefaultsAlpha.alignChildren = 'left';
+      grpDefaultsAlpha.spacing = 0;
+      grpDefaultsAlpha.margins = [0,0,0,0];
+      
+      // Defaults : Save alpha
+      var chkDefaultsSaveAlpha = grpDefaultsAlpha.add('checkbox', undefined, 'Save Alpha', {name: 'saveAlpha'});
+      chkDefaultsSaveAlpha.value = prefs.defaults.getFormat().isUsedAlpha();
+      switch(prefs.defaults.getFormat().getFormatInUse()){
+        case Enums.formats.JPG:
+        //case Enums.formats.BMP: // Make up mind about support
+          chkDefaultsSaveAlpha.enabled = false;
+          break;
+        default:
+          chkDefaultsSaveAlpha.enabled = true;
+          break;
+      }
+      
+      // Defaults : Pre and Post processing
+      var btnPrePost = grpDefaultsAlpha.add('button', undefined, ('Pre-/Postprocessing'), {name: 'btnEditSlot'});
+      btnPrePost.preferredSize = [120, editTextHeight+6];
+      btnPrePost.onClick = (function(btnPrePost) {
+        return function() {
+          newProcessingWindow(undefined, btnPrePost, chkConfirmDialogs);
+        }
+      })(btnPrePost);
+
+      if (PSVERSION >= 11) {
+        if (prefs.defaults.getProcessor().getPreProcessor().getIsUsed() || prefs.defaults.getProcessor().getPostProcessor().getIsUsed()) {
+          btnPrePost.graphics.font = ScriptUI.newFont ("Arial", "ITALIC", 11);
+        }
+      }
+      // Call the first on change after all necessary parts have been defined
+      listFormats.onChange();
+    } // !If showing defaults
+    
+    var pnlRows = win.add( 'panel', undefined, 'Texture maps' );
+    pnlRows.preferredSize = [diagWidth, null];
+    pnlRows.orientation = 'row';
+
+    var grpRow = pnlRows.add( 'group' );
+    grpRow.orientation = 'column';
+    grpRow.margins = [0,8,0,0]
+
+    // Paging
+    var currentOffset = ( dialogState.getRowsOffset() < prefs.rows.length ) ? dialogState.getRowsOffset() : 0;
+    var maxRows = prefs.qsmPrefs.getMapsPerPage();
+    var currentMax = ( prefs.rows.length - currentOffset > maxRows ) ? maxRows : prefs.rows.length - currentOffset;
+    currentMax +=  currentOffset;
+
+    // --- ROWS ---
+    for (var __i__ = currentOffset; __i__ < currentMax; __i__++ )
+    { 
+      var row = prefs.rows[__i__];
+      var composeRGB = row.getComposeRGB();
+      var row_index = __i__;
+      
+      var title =  '';
+      if ( row.getName() ) {
+        title = ((checkName(row.getName())).toLowerCase().capitalize() + " map")
+      } else {
+        title = 'New Map';
+      }
+      
+      var pnlRow = grpRow.add( 'panel', undefined, title, {name: row_index} );
+      pnlRow.graphics.font = ScriptUI.newFont ( "Arial", "BOLD", 14 );
+      pnlRow.alignment = 'left';
+      pnlRow.orientation = 'row';
+      pnlRow.margins = [10, 12, 10, 3]
+      //pnlRow.graphics.backgroundColor = pnlRow.graphics.newBrush(pnlRow.graphics.BrushType.SOLID_COLOR, [0.94, 0.94, 0.94, 1]);
+      
+      // --- 1/5 Column ---//
+      var grp_1 = pnlRow.add( 'group', undefined, {name : 'grp_1'} );
+      grp_1.orientation = 'column';
+      grp_1.alignment = 'top';
+      grp_1.alignChildren = 'left';
+      grp_1.spacing = 0;
+      grp_1.margins = [3, 3, 3, 3];
+      grp_1.graphics.font = "dialog:" + dialogFontSize;
+      
+      // Rows : Layer name
+      grp_1.add( 'statictext', undefined, 'Layer name', {} );
+      var etxt_lookfor = grp_1.add( 'edittext', undefined, row.getName(), {name: 'lookfor'} );
+      etxt_lookfor.preferredSize = [100, editTextHeight];
+      etxt_lookfor.alignment = 'left';
+
+      etxt_lookfor.onChange = (function(etxt_lookfor) {
+        return function() {
+          etxt_lookfor.text = checkName(etxt_lookfor.text);
+        }
+      })(etxt_lookfor);
+ 
+      /*
+      grp_1_composeRGB = grp_1.add( 'group' );
+      grp_1_composeRGB.orientation = 'row';
+      grp_1_composeRGB.spacing = 0;
+      grp_1_composeRGB.margins = [0, 0, 0, 0];
+      grp_1_composeRGB.hide()
+      btn_compose_rgb = grp_1_composeRGB.add( 'button', undefined, '' );
+      btn_compose_rgb.preferredSize = [100, 20];
+      
+      var composeRGB = row.getComposeRGB();
+      if ( composeRGB.getIsUsed() ) {
+        btn_compose_rgb.graphics.font = italicFont;
+        grp_1_composeRGB.graphics.backgroundColor = grp_1_composeRGB.graphics.newBrush(grp_1_composeRGB.graphics.BrushType.SOLID_COLOR, [0, 1, 0, 0.25]);
+      } else {
+        btn_compose_rgb.graphics.font = normalFont;
+      }
+      
+      btn_compose_rgb.text = 'Compose RGBA  \n';
+      btn_compose_rgb.margins = [0,0,0,0];
+      btn_compose_rgb.spacing = 0;
+      */
+      
+      // Rows : Basename
+      grp_1.add('statictext', undefined, 'Basename (optional)');
+      var etxt_basename = grp_1.add('edittext', undefined, row.getBasename(), {name: 'basename'});
+      etxt_basename.preferredSize = [105, editTextHeight];
+      etxt_basename.alignment = 'left';
+      etxt_basename.onChange = (function(etxt_basename) {
+        return function() {
+          etxt_basename.text = checkName(etxt_basename.text);
+        }
+      })(etxt_basename);
+      
+      // Rows : Convention name
+      grp_1.add('statictext', undefined, 'Convention', {});
+      var etxt_convention = grp_1.add('edittext', undefined, row.getConvention(), {name: 'convention'});
+      etxt_convention.preferredSize = [100, editTextHeight];
+      
+      // Define this callback after ext_convention
+      etxt_lookfor.onChanging = (function(row_id, pnlRow, etxt_lookfor, etxt_convention) {
+        return function() {
+        
+          var row = prefs.rows[row_id];
+          var composeRGB = row.getComposeRGB();
+          
+          if ( pnlRow.text = etxt_lookfor.text ) {
+            pnlRow.text = ((checkName(etxt_lookfor.text)).toLowerCase().capitalize() + " map")
+          } else {
+            pnlRow.text = 'New Map';
+          }
+
+          if (etxt_convention.text == '') {
+            etxt_convention.text = '_' + pnlRow.text.charAt(0).toUpperCase();
+          }
+        }
+      })( row_index, pnlRow, etxt_lookfor, etxt_convention);
+      
+      // --- 2/5 Column --- //
+      var grp_2 = pnlRow.add('group', undefined, {name : 'grp_2'});
+      grp_2.orientation = 'column';
+      grp_2.alignment = 'top';
+      grp_2.alignChildren = 'left';
+      grp_2.spacing = 0;
+      grp_2.margins = [3,3,3,3];
+      grp_2.graphics.font = "dialog:"+dialogFontSize;
+
+      // Rows : Scale
+      grp_2.add('statictext', undefined, 'Scale');
+      var grpScale = grp_2.add('group', undefined, {name: 'grpScale' });
+      grpScale.orientation = 'row';
+      var listScale = grpScale.add('dropdownlist', undefined, undefined, {name : 'listScale'})
+      listScale.preferredSize = [60, editTextHeight+2];
+      listScale.add('item', 'Full');
+      listScale.add('item', 'Half');
+      listScale.add('item', 'Quarter');
+      listScale.add('item', 'Custom');
+      listScale.add('item', 'Fixed');
+      
+      var scale = row.getScale();
+      
+      var etxt_scale = grpScale.add('edittext', undefined, row.getScale(), {name: 'etxt_scale'});
+      etxt_scale.preferredSize = [40, editTextHeight];
+      etxt_scale.alignment = 'left';
+      etxt_scale.enabled = false;
+      
+      var grpScaleFixed = grp_2.add('group', undefined, {name: 'grpScaleFixed' });
+      grpScaleFixed.orientation = 'row';
+      grpScaleFixed.spacing = 0;
+      grpScaleFixed.margins = [0,0,0,0];
+      grpScaleFixed.alignChildren = 'left';
+      var etxtFixedWidth = grpScaleFixed.add('edittext', undefined, '',  {name: 'etxtFixedWidth' });
+      etxtFixedWidth.preferredSize = [50, 18];
+      etxtFixedWidth.helpTip = 'Width in pixels';
+      etxtFixedWidth.text = row.getScaleX();
+      grpScaleFixed.add('statictext', undefined, 'x');
+      var etxtFixedHeight = grpScaleFixed.add('edittext', undefined, '',  {name: 'etxtFixedHeight' });
+      etxtFixedHeight.helpTip = 'Height in pixels';
+      etxtFixedHeight.preferredSize = [50, 18];
+      etxtFixedHeight.text = row.getScaleY();
+
+      if ( row.getIsScaleFixed() )
+      {
+        listScale.selection = 4;
+      }
+      else
+      {
+        switch(scale) {
+          case 1:
+            listScale.selection = 0;
+            break;
+          case 0.5:
+            listScale.selection = 1;
+            break;
+          case 0.25:
+            listScale.selection = 2;
+            break;
+          default:
+            listScale.selection = 3;
+            break;
+        }
+      }
+      
+      etxtFixedWidth.enabled = ( listScale.selection == 4 );
+      etxtFixedHeight.enabled = ( listScale.selection == 4 );
+
+      listScale.onChange = (function(grpScale, grpScaleFixed){
+        return function(){
+          grpScale['etxt_scale'].enabled = false;
+          grpScaleFixed['etxtFixedWidth'].enabled = false;
+          grpScaleFixed['etxtFixedHeight'].enabled = false;
+          switch(grpScale['listScale'].selection.index)
+          {
+            case 0:
+              grpScale['etxt_scale'].text = '1';
+              break;
+            case 1:
+              grpScale['etxt_scale'].text = '0.5';
+              break;
+            case 2:
+              grpScale['etxt_scale'].text = '0.25';
+              break;
+            case 3:
+              grpScale['etxt_scale'].enabled = true;
+              break;
+            case 4:
+              grpScaleFixed['etxtFixedWidth'].enabled = true;
+              grpScaleFixed['etxtFixedHeight'].enabled = true;
+              break;
+          }
+        }
+      })(grpScale, grpScaleFixed)
+      
+      // Rows : Resampling
+      grp_2.add('statictext', undefined, 'Resampling method: ')
+      var listResample = grp_2.add('dropdownlist', undefined, undefined, { name: 'listResample' });
+      listResample.preferredSize = [110, 20];
+      for (var i in Enums.resampler){
+        listResample.add('item', Enums.resampler[i].nicename, undefined, {keyname: Enums.resampler[i].keyname});
+      }
+      listResample.selection = row.getResampler().id;
+      
+      // --- 3/5 Column --- //
+      var grp_3 = pnlRow.add('group', undefined, {name : 'grp_3'});
+      grp_3.orientation = 'column';
+      grp_3.alignment = 'top';
+      grp_3.alignChildren = 'left';
+      grp_3.spacing = 0;
+      grp_3.margins = [3,3,3,3];
+      grp_3.graphics.font = "dialog:"+dialogFontSize;
+
+      grp_3.add('statictext', undefined, 'Format', {});
+      var grpFormat = grp_3.add('group', undefined, {name: 'grpFormat'});
+      grpFormat.orientation = 'column';
+      grpFormat.spacing = 0;
+      grpFormat.alignChildren = 'left';
+      grpFormat.margins = [0,0,0,0];
+      
+      // Rows : Formats
+      var listFormats = grpFormat.add('dropdownlist', undefined, undefined, {name : 'listFormats'})
+      listFormats.preferredSize = [85, editTextHeight+2];
+      for (var x in Enums.formats) {
+        listFormats.add('item', Enums.formats[x].nicename, undefined, {keyname: Enums.formats[x].keyname});
+      }
+
+      listFormats.selection = row.getFormat().getFormatInUse().id;
+      
+      /*
+      listFormats.onChange = (function(element, newCallback, row_index) {
+        return function() {
+          var list = element['grp_3']['formatGroup']['listFormats'];
+          var index = list.selection.index;
+          var keyname = list.items[index].properties.keyname;
+          var format = Enums.formats[keyname];
+
+          switch(format) {
+            case Enums.formats.DEFAULT:
+              element['grp_3']['formatGroup']['editFormat'].enabled = false;
+              break;
+            case Enums.formats.JPG:
+              element['grp_3']['formatGroup']['editFormat'].enabled = true;
+              break;
+            default:
+              element['grp_3']['formatGroup']['editFormat'].enabled = true;
+              break;
+          }
+          
+          //element['grp_4']['saveAlpha'].onClick();
+          
+          // Don't allow DDS on MAC
+          if ( ! ISWINDOWS ) {
+            if ( format == Enums.formats.DDS )
+            {
+              alert(NOTAVAILMACMSG);
+              list.selection = 0;
+            }
+          }
+          
+          // Change the onClick callback
+          element['grp_3']['formatGroup']['editFormat'].onClick = (function(format, row_index){
+            return newCallback(format, row_index);
+          })( format, row_index );
+        }
+      })(pnlRow, editFormatCallback, i );
+      */
+      
+      // Rows : Edit the format
+      var btnEditFormat = grpFormat.add('button', undefined, 'Format settings', {name: 'editFormat'});
+      btnEditFormat.preferredSize = [85, editTextHeight+2];
+      btnEditFormat.alignment = 'left';
+      btnEditFormat.enabled = row.getFormat().getFormatInUse().id ? true : false;
+      
+      btnEditFormat.onClick = (function(listFormats, row_index){
+        return function() {
+          var index = listFormats.selection.index;
+          var keyname = listFormats.items[index].properties.keyname;
+          var format = Enums.formats[keyname];
+          return editFormatCallback(format, row_index, prefs); // send format and 'undefined' as row_id
+        }
+      })(listFormats, i); // send dropdown list
+      
+      // Rows : Save Alpha?
+      var chkSaveAlpha = grp_3.add('checkbox', undefined, 'Save Alpha', {name: 'chkSaveAlpha'});
+      chkSaveAlpha.value = row.getFormat().isUsedAlpha();
+      
+      /* DROPPED FEATURE: CONVERSIONS
+      // Rows : Conversion
+      grp_3.add('group').preferredSize = [10, 10]; // spacer
+      grp_3.add('statictext', undefined, 'Conversions', {});
+      var listConvert = grp_3.add('dropdownlist', undefined, undefined, {name : 'convert'})
+      listConvert.preferredSize = [110, editTextHeight+2];
+      for (x in Enums.conversions) {
+        listConvert.add('item', Enums.conversions[x].nicename, undefined, {keyname: Enums.conversions[x].keyname});
+      }
+      listConvert.selection = row.getFormat().getConversion().id;
+      */
+      
+      listFormats.onChange = (function(listFormats, btnEditFormat, chkSaveAlpha, newCallback, row_index) {
+        return function() {
+          var list = listFormats;
+          var index = list.selection.index;
+          var keyname = list.items[index].properties.keyname;
+          var format = Enums.formats[keyname];
+
+          switch(format) {
+            case Enums.formats.DEFAULT:
+            case Enums.formats.CRYTIF:
+              btnEditFormat.enabled = false;
+              break;
+            case Enums.formats.JPG:
+              btnEditFormat.enabled = true;
+              break;
+            default:
+              btnEditFormat.enabled = true;
+              break;
+          }
+          
+          chkSaveAlpha.enabled = ( format.alpha );
+          chkSaveAlpha.onClick();
+          
+          // Don't allow DDS on MAC
+          if ( ! ISWINDOWS ) {
+            if ( format == Enums.formats.DDS )
+            {
+              alert(NOTAVAILMACMSG);
+              list.selection = 0;
+            }
+          }
+          
+          // Change the onClick callback
+          btnEditFormat.onClick = (function(format, row_index){
+            return newCallback(format, row_index, prefs);
+          })( format, row_index );
+        }
+      })( listFormats, btnEditFormat, chkSaveAlpha, editFormatCallback, row_index );
+      
+      // --- 4/5 Column --- //
+      var imgAddLayerSet = ScriptUI.newImage(new File(SCRIPTPATH+'images/addLayerSet.png'), new File(SCRIPTPATH+'images/addLayerSet_d.png'));
+            
+      var grp_4 = pnlRow.add('group', undefined, {name : 'grp_4'});
+      grp_4.orientation = 'column';
+      grp_4.alignment = 'top';
+      grp_4.alignChildren = 'left';
+      grp_4.spacing = 0;
+      grp_4.margins = [3,3,3,3];
+      grp_4.graphics.font = "dialog:"+dialogFontSize;
+
+      grp_4.add('statictext', undefined, 'Channel replacement', {});
+      
+      var channel_etxtSize = [80, 18];
+      
+      // Rows: Channel Mapping
+      // Rows: Red channel
+      var grpRed = grp_4.add('group', undefined, { name: 'grpRed' } );
+      grpRed.orientation = 'row';
+      grpRed.spacing = 0;
+      grpRed.margins = [0,0,0,0];
+      var chkRed =grpRed.add( 'checkbox', undefined, 'R', { name: 'chkRed' } );
+      chkRed.value = row.getComposeRGB().getIsUsedLayerRed();
+      var etxtRed = grpRed.add( 'edittext', undefined, '', { name: 'etxtRed' } );
+      etxtRed.preferredSize = channel_etxtSize; 
+      etxtRed.text = row.getComposeRGB().getLayerRed();
+      
+      var btnAddToDoc_Red = grpRed.add('iconbutton', undefined, imgAddLayerSet, {name: 'btnAddToDoc_Red', style:'toolbutton'});
+      btnAddToDoc_Red.preferredSize = btnSize;
+      btnAddToDoc_Red.helpTip = 'Adds a layerset to your document';
+      // If there is no document open, don't enable it
+      btnAddToDoc_Red.enabled = true;
+      if ( ! DOCOPEN )
+      {
+        btnAddToDoc_Red.enabled = false;
+        btnAddToDoc_Red.helpTip += ' [no document open]'; 
+      }
+      
+      btnAddToDoc_Red.onClick = (function(etxtRed) {
+        return function() {          
+          if (etxtRed.text != '') {
+            addLayerToDocument(etxtRed.text);
+          } else {
+            alert('Please enter a Layer name first.');
+            etxtRed.active = true;
+          }
+        }
+      })(etxtRed);
+      
+      chkRed.onClick = (function( chkRed, etxtRed, btnAddToDoc_Red ) {
+        return function() {
+          etxtRed.enabled = chkRed.value;
+          btnAddToDoc_Red.enabled = (  etxtRed.enabled && DOCOPEN );
+        }
+      })( chkRed, etxtRed, btnAddToDoc_Red );
+      chkRed.onClick();
+      
+      // Rows: Green channel
+      var grpGreen = grp_4.add('group', undefined, { name: 'grpGreen' } );
+      grpGreen.orientation = 'row';
+      grpGreen.spacing = 0;
+      grpGreen.margins = [0,0,0,0];
+      var chkGreen =grpGreen.add( 'checkbox', undefined, 'G', { name: 'chkGreen' } );
+      chkGreen.value = row.getComposeRGB().getIsUsedLayerGreen();
+      var etxtGreen = grpGreen.add( 'edittext', undefined, '', { name: 'etxtGreen' } );
+      etxtGreen.preferredSize = channel_etxtSize; 
+      etxtGreen.text = row.getComposeRGB().getLayerGreen();
+
+      var btnAddToDoc_Green = grpGreen.add('iconbutton', undefined, imgAddLayerSet, {name: 'btnAddToDoc_Green', style:'toolbutton'});
+      btnAddToDoc_Green.preferredSize = btnSize;
+      btnAddToDoc_Green.helpTip = 'Adds a layerset to your document';
+      // If there is no document open, don't enable it
+      btnAddToDoc_Green.enabled = true;
+      if ( ! DOCOPEN )
+      {
+        btnAddToDoc_Green.enabled = false;
+        btnAddToDoc_Green.helpTip += ' [no document open]'; 
+      }
+      
+      btnAddToDoc_Green.onClick = (function(etxtGreen) {
+        return function() {          
+          if (etxtGreen.text != '') {
+            addLayerToDocument(etxtGreen.text);
+          } else {
+            alert('Please enter a Layer name first.');
+            etxtGreen.active = true;
+          }
+        }
+      })(etxtGreen);
+      
+      chkGreen.onClick = (function( chkGreen, etxtGreen, btnAddToDoc_Green ) {
+        return function() {
+          etxtGreen.enabled = chkGreen.value;
+          btnAddToDoc_Green.enabled = (  etxtGreen.enabled && DOCOPEN );
+        }
+      })( chkGreen, etxtGreen, btnAddToDoc_Green );
+      chkGreen.onClick();
+      
+      // Rows: Blue channel
+      var grpBlue = grp_4.add('group', undefined, { name: 'grpBlue' } );
+      grpBlue.orientation = 'row';
+      grpBlue.spacing = 0;
+      grpBlue.margins = [0,0,0,0];
+      var chkBlue =grpBlue.add( 'checkbox', undefined, 'B', { name: 'chkBlue' } );
+      chkBlue.value = row.getComposeRGB().getIsUsedLayerBlue();
+      var etxtBlue = grpBlue.add( 'edittext', undefined, '', { name: 'etxtBlue' } );
+      etxtBlue.preferredSize = channel_etxtSize; 
+      etxtBlue.text = row.getComposeRGB().getLayerBlue();
+
+      var btnAddToDoc_Blue = grpBlue.add('iconbutton', undefined, imgAddLayerSet, {name: 'btnAddToDoc_Blue', style:'toolbutton'});
+      btnAddToDoc_Blue.preferredSize = btnSize;
+      btnAddToDoc_Blue.helpTip = 'Adds a layerset to your document';
+      // If there is no document open, don't enable it
+      btnAddToDoc_Blue.enabled = true;
+      if ( ! DOCOPEN )
+      {
+        btnAddToDoc_Blue.enabled = false;
+        btnAddToDoc_Blue.helpTip += ' [no document open]'; 
+      }
+      
+      btnAddToDoc_Blue.onClick = (function(etxtBlue) {
+        return function() {          
+          if (etxtBlue.text != '') {
+            addLayerToDocument(etxtBlue.text);
+          } else {
+            alert('Please enter a Layer name first.');
+            etxtBlue.active = true;
+          }
+        }
+      })(etxtBlue);
+      
+      chkBlue.onClick = (function( chkBlue, etxtBlue, btnAddToDoc_Blue ) {
+        return function() {
+          etxtBlue.enabled = chkBlue.value;
+          btnAddToDoc_Blue.enabled = (  etxtBlue.enabled && DOCOPEN );
+        }
+      })( chkBlue, etxtBlue, btnAddToDoc_Blue );
+      chkBlue.onClick();
+      
+      // Rows: Alpha channel replacement
+      
+      var grpAlpha = grp_4.add('group', undefined, {name: 'grpAlpha'} );
+      grpAlpha.orientation = 'row';
+      grpAlpha.spacing = 0;
+      grpAlpha.margins = [0,0,0,0];
+      var chkAlpha = grpAlpha.add( 'checkbox', undefined, 'A', {name: 'chkAlpha'} );
+      chkAlpha.value = row.getFormat().isUsedAlphaLayer();
+      var etxtAlpha = grpAlpha.add('edittext', undefined, '',  {name: 'etxtAlpha'} );
+      etxtAlpha.preferredSize = channel_etxtSize; 
+      etxtAlpha.text = row.getFormat().getAlphaLayer();
+      
+      var btnAddToDoc_Alpha = grpAlpha.add('iconbutton', undefined, imgAddLayerSet, {name: 'btnAddToDoc_Alpha', style:'toolbutton'});
+      btnAddToDoc_Alpha.preferredSize = btnSize;
+      btnAddToDoc_Alpha.helpTip = 'Adds a layerset to your document';
+      // If there is no document open, don't enable it
+      btnAddToDoc_Alpha.enabled = true;
+      if ( ! DOCOPEN )
+      {
+        btnAddToDoc_Alpha.enabled = false;
+        btnAddToDoc_Alpha.helpTip += ' [no document open]'; 
+      }
+      
+      btnAddToDoc_Alpha.onClick = (function(etxtAlpha) {
+        return function() {          
+          if (etxtAlpha.text != '') {
+            addLayerToDocument(etxtAlpha.text);
+          } else {
+            alert('Please enter a Layer name first.');
+            etxtAlpha.active = true;
+          }
+        }
+      })(etxtAlpha);
+      
+      chkAlpha.onClick = (function( chkAlpha, etxtAlpha, chkSaveAlpha, btnAddToDoc_Alpha ) {
+        return function() {
+          chkAlpha.enabled = ( chkSaveAlpha.value && chkSaveAlpha.enabled);
+          etxtAlpha.enabled = ( chkAlpha.value && chkSaveAlpha.value && chkAlpha.enabled );
+          btnAddToDoc_Alpha.enabled = ( etxtAlpha.enabled );
+        }
+      })( chkAlpha, etxtAlpha, chkSaveAlpha, btnAddToDoc_Alpha );
+      
+      chkSaveAlpha.onClick = (function( chkAlpha ) {
+        return function() {
+          chkAlpha.onClick();
+        }
+      })( chkAlpha );
+      
+      // Kick off alpha
+      chkSaveAlpha.onClick();
+      
+      // Rows : Alpha
+      /*
+      grp_4.add('statictext', undefined, 'Alpha', {});
+      var chkAlpha = grp_4.add('checkbox', undefined, 'Save alpha channel', {name: 'saveAlpha'});
+      chkAlpha.value = row.getFormat().isUsedAlpha();
+      
+      chkAlpha.onClick = (function(element){
+        return function(){
+          if (element['saveAlpha'].value){
+            element['alphaChannelGroup'].enabled = true;
+          } else {
+            element['alphaChannelGroup'].enabled = false;
+          }
+          
+          element['alphaChannelGroup']['grp_alphaLayer']['alphaLayer'].enabled = ( element['alphaChannelGroup'].enabled && element['alphaChannelGroup']['useAlphaLayer'].value );
+          element['alphaChannelGroup']['grp_alphaLayer']['btnAddToDoc'].enabled = ( element['alphaChannelGroup'].enabled && element['alphaChannelGroup']['useAlphaLayer'].value && DOCOPEN );
+        }
+      })(grp_4);
+      
+      // Rows : Save Alpha channel
+      var grpAlphaChannel = grp_4.add('group', undefined, {name: 'alphaChannelGroup'});
+      grpAlphaChannel.orientation = 'column';
+      grpAlphaChannel.alignChildren = 'left';
+      
+      // Rows : Use Alpha Layer
+      var chkAlphaLayer = grpAlphaChannel.add('checkbox', undefined, 'Use layer set:', {name: 'useAlphaLayer'});
+      chkAlphaLayer.value = (row.getFormat().isUsedAlphaLayer() && row.getFormat().getAlphaLayer());
+      chkAlphaLayer.onClick = (function(element){
+        return function(){
+          element['grp_alphaLayer']['alphaLayer'].enabled = element['useAlphaLayer'].value;
+          element['grp_alphaLayer']['btnAddToDoc'].enabled = ( element['useAlphaLayer'].value && DOCOPEN );
+        }
+      })(grpAlphaChannel);
+      
+      // Rows : Alpha Layer
+      var grp_alphaLayer = grpAlphaChannel.add('group', undefined, {name : 'grp_alphaLayer'} );
+      grp_alphaLayer.orientation = 'row';
+      var etxt_alphaLayer = grp_alphaLayer.add('edittext', undefined, row.getFormat().getAlphaLayer(), {name: 'alphaLayer'});
+      etxt_alphaLayer.preferredSize = [100, editTextHeight];
+      etxt_alphaLayer.alignment = 'left';
+      etxt_alphaLayer.enabled = chkAlphaLayer.value;
+      
+      var imgAddLayerSetAlpha = ScriptUI.newImage(new File(SCRIPTPATH+'images/addLayerSet.png'), new File(SCRIPTPATH+'images/addLayerSet_d.png'));
+      var btnAddAlphaToDoc = grp_alphaLayer.add('iconbutton', undefined, imgAddLayerSetAlpha, {name: 'btnAddToDoc', style:'toolbutton'});
+      btnAddAlphaToDoc.helpTip = 'Adds this alpha layerset to your document';
+      // If there is no document open, don't enable it
+      
+      btnAddAlphaToDoc.onClick = (function(etxt_lookfor) {
+        return function() {          
+          if (etxt_lookfor.text != '') {
+            addLayerToDocument(etxt_lookfor.text);
+          } else {
+            alert('Please enter a Layer name first.');
+            etxt_lookfor.active = true;
+          }
+        }
+      })(etxt_alphaLayer);
+      
+      // Call after all necessary objects have been defined
+      chkAlphaLayer.onClick();
+      chkAlpha.onClick();
+      */
+      listFormats.onChange();
+      
+      // --- 5/5 Column --- //
+      var grp_5 = pnlRow.add('group', undefined, {name : 'grp_5'});
+      grp_5.orientation = 'column';
+      grp_5.alignment = 'top';
+      grp_5.alignChildren = 'left';
+      grp_5.spacing = 0;
+      grp_5.margins = [0,0,0,0];
+      grp_5.graphics.font = "dialog:"+dialogFontSize;
+
+      var pnl_actions = grp_5.add('panel', undefined, 'Actions');
+      pnl_actions.margins = [5, 15, 5, 5];
+      pnl_actions.spacing = 0;
+      pnl_actions.preferredSize = [120,50];
+      pnl_actions.alignChildren = 'left';
+
+      var grp_actions = pnl_actions.add('group');
+      grp_actions.orientation = 'row';
+      grp_actions.margins = [0,0,0,0];
+      grp_actions.spacing = 20;
+      
+      var imgRemove = ScriptUI.newImage(new File(SCRIPTPATH+'images/remove.png'));
+      var btnRemoveSlot = grp_actions.add('iconbutton', undefined, imgRemove, {name: 'btnRemoveSlot', style:'toolbutton'});
+      btnRemoveSlot.preferredSize = btnSize;
+      btnRemoveSlot.helpTip = 'Removes this map from your config';
+      btnRemoveSlot.onClick = (function(id) {
+        return function() {
+          var proceed = {state:true};
+          // Switch to normal config mode
+          newYouSureWindow('You are about to remove this map. This cannot be undone.', proceed, prefs, chkConfirmDialogs)();
+          if (proceed.state) {
+            updatePrefs();
+            dialogState.setState('__REFRESH__');
+            prefs.rows.splice(id, 1);
+            win.close();
+          }
+        }
+      })( row_index );
+      
+      // Rows : Add layerset button
+      var imgAddLayerSet = ScriptUI.newImage(new File(SCRIPTPATH+'images/addLayerSet.png'), new File(SCRIPTPATH+'images/addLayerSet_d.png'));
+      var btnAddToDoc = grp_actions.add('iconbutton', undefined, imgAddLayerSet, {name: 'btnAddToDoc', style:'toolbutton'});
+      btnAddToDoc.preferredSize = btnSize;
+      btnAddToDoc.helpTip = 'Adds a layerset to your document';
+      // If there is no document open, don't enable it
+      btnAddToDoc.enabled = true;
+      if ( ! DOCOPEN )
+      {
+        btnAddToDoc.enabled = false;
+        btnAddToDoc.helpTip += ' [no document open]'; 
+      }
+      
+      btnAddToDoc.onClick = (function(etxt_lookfor) {
+        return function() {          
+          if (etxt_lookfor.text != '') {
+            addLayerToDocument(etxt_lookfor.text);
+          } else {
+            alert('Please enter a Layer name first.');
+            etxt_lookfor.active = true;
+          }
+        }
+      })(etxt_lookfor);
+      
+      var grp_actions_2 = pnl_actions.add('group');
+      grp_actions_2.orientation = 'row';
+      grp_actions_2.margins = [0,0,0,0];
+      grp_actions_2.spacing =  20;
+      
+      var imgDuplicate = ScriptUI.newImage(new File(SCRIPTPATH+'images/duplicate.png'));
+      var btnDuplicate = grp_actions_2.add('iconbutton', undefined, imgDuplicate, {name: 'btnDuplicateSlot', style:'toolbutton'});
+      btnDuplicate.preferredSize = btnSize;
+      btnDuplicate.helpTip = 'Duplicate this map';
+      btnDuplicate.onClick = ( function(row_id) {
+        return function() {
+          updatePrefs();
+          dialogState.setState('__DUPLICATE_ROW__');
+          var row = prefs.rows[row_id];
+          var copyRow = new CRow( row.toXML() );
+          copyRow.setName( copyRow.getName() + ' (duplicate)' );
+          prefs.rows.splice(row_id + 1, 0, copyRow);
+          win.close();
+        }
+      } )( row_index );
+      
+      var imgMapUp = ScriptUI.newImage(new File(SCRIPTPATH+'images/up.png'), new File(SCRIPTPATH+'images/up_d.png'));
+      var btnMoveMapUp = grp_actions_2.add('iconbutton', undefined, imgMapUp, {name: 'btnMoveMapUp', style:'toolbutton'});
+      btnMoveMapUp.preferredSize = btnSize;
+      btnMoveMapUp.onClick = ( function(row_id) {
+        return function() {
+          if (row_id-1 >= 0)
+          {
+            updatePrefs();
+            dialogState.setState('__MOCE_MAP_UP__');
+            prefs.rows[row_id-1] = prefs.rows.splice(row_id, 1, prefs.rows[row_id-1])[0];
+            win.close();
+          }
+        }
+      } )( row_index );
+      btnMoveMapUp.enabled = ( row_index - 1 >= 0 );
+      btnMoveMapUp.helpTip = 'Move this map up';
+      
+      var imgMapDown = ScriptUI.newImage(new File(SCRIPTPATH+'images/down.png'), new File(SCRIPTPATH+'images/down_d.png'));
+      var btnMoveMapDown = grp_actions_2.add('iconbutton', undefined, imgMapDown, {name: 'btnMoveMapDown', style:'toolbutton'});
+      btnMoveMapDown.preferredSize = btnSize;
+      btnMoveMapDown.onClick = ( function(row_id) {
+        return function() {
+          if (row_id+1 < prefs.rows.length)
+          {
+            updatePrefs();
+            dialogState.setState('__MOCE_MAP_UP__');
+            prefs.rows[row_id+1] = prefs.rows.splice(row_id, 1, prefs.rows[row_id+1])[0];
+            win.close();
+          }
+        }
+      } )( row_index );
+      btnMoveMapDown.enabled = ( row_index + 1 < prefs.rows.length );
+      btnMoveMapDown.helpTip = 'Move this map down';
+      
+      /*
+      // Finally the compose RGB onClick handler. It needs the btnAddToDoc var... 
+      btn_compose_rgb.onClick = ( function( row_id, pnlRow, button, etxt_lookfor, btnAddToDoc, chkAlpha, chkAlphaLayer, etxt_alphaLayer, grp_1_composeRGB ) {
+        return function() {
+          updatePrefs();
+          composeRGBWindow( row_id, button );
+          var row = prefs.rows[row_id];
+          var composeRGB = row.getComposeRGB();
+          if ( composeRGB.getIsUsed() ) {
+            if ( !pnlRow.text.match(/\(Composed RGB Mode\)$/gi) ) {
+              pnlRow.text += ' (Composed RGB Mode)';
+            }
+          } else {
+            if ( pnlRow.text.match(/\(Composed RGB Mode\)$/gi) ) {
+              pnlRow.text = pnlRow.text.replace(/\(Composed RGB Mode\)$/gi,'');
+            }
+          }
+          var row = prefs.rows[row_id];
+          var format = row.getFormat();
+
+          chkAlpha.value = format.isUsedAlpha();
+          chkAlphaLayer.value = format.isUsedAlphaLayer();
+          etxt_alphaLayer.text = format.getAlphaLayer();
+          etxt_alphaLayer.enabled = chkAlphaLayer.value;
+          chkAlpha.onClick();
+          
+          if ( composeRGB.getIsUsed() )
+          {
+            grp_1_composeRGB.graphics.backgroundColor = grp_1_composeRGB.graphics.newBrush(grp_1_composeRGB.graphics.BrushType.SOLID_COLOR, [0, 1, 0, 0.25]);
+          }
+          else
+          {
+            grp_1_composeRGB.graphics.backgroundColor = grp_1_composeRGB.graphics.newBrush(grp_1_composeRGB.graphics.BrushType.SOLID_COLOR, [0.8, 0.8, 0.8, 0.0]);
+          }
+        }
+      } )( i, pnlRow, btn_compose_rgb, etxt_lookfor, btnAddToDoc, chkAlpha, chkAlphaLayer, etxt_alphaLayer, grp_1_composeRGB );
+      btn_compose_rgb.helpTip = 'Allows you to specify each of the RGB channels separately';
+      */
+      
+      // Rows :Save Now button
+      var imgSaveNow = ScriptUI.newImage(new File(SCRIPTPATH+'images/save.png'), new File(SCRIPTPATH+'images/save_d.png'));
+      var btnSaveNow = grp_actions.add('iconbutton', undefined, imgSaveNow, {name: 'btnSaveNow', style:'toolbutton'});
+      btnSaveNow.helpTip = 'Save this texture map now';
+      btnSaveNow.preferredSize = btnSize;
+      btnSaveNow.enabled = (bIsDocumentOpen && bIsDocumentSaved);
+      btnSaveNow.onClick = (function(prefs, row, etxt_lookfor) {
+        return function() {
+          var composeRGB = row.getComposeRGB();
+          if ( !composeRGB.getIsUsed() )
+          {
+            if (etxt_lookfor.text != '') {
+              updatePrefs();
+              saveMaps(Enums.saveModes.INTERFACE, {prefs:prefs, row:row});
+            } else {
+              alert('Please enter a Layer name first.');
+              etxt_lookfor.active = true;
+            }
+          } else {
+            updatePrefs();
+            saveMaps(Enums.saveModes.INTERFACE, {prefs:prefs, row:row});
+          }
+        }
+      })(prefs, row, etxt_lookfor);
+      
+      // Rows : Pre and Post processing
+      var grp_pre_pro = grp_5.add('group');
+      var btnPrePost = grp_pre_pro.add('button', undefined, ('Pre-/Postprocessing'), {name: 'btnEditSlot'});
+      
+      btnPrePost.preferredSize = [120, editTextHeight+2+15];
+      btnPrePost.onClick = (function(row_index, btnPrePost) {
+        return function() {
+          newProcessingWindow(row_index, btnPrePost, chkConfirmDialogs)();
+        }
+      })(row_index, btnPrePost);   
+      
+      if (row.getProcessor().getPreProcessor().getIsUsed() || row.getProcessor().getPostProcessor().getIsUsed()) {
+        btnPrePost.graphics.font = ScriptUI.newFont ("Arial", "ITALIC", 11);
+        grp_pre_pro.graphics.backgroundColor = grp_pre_pro.graphics.newBrush( grp_pre_pro.graphics.BrushType.SOLID_COLOR, [0, 1, 0, 0.25] );
+      }
+    }
+
+    // Pager functionality
+    var maxPages = Math.ceil(prefs.rows.length / maxRows);
+    var current_page = Math.ceil(currentOffset / maxRows) + 1;
+    
+    var grpBelow = grpRow.add('group');
+    grpBelow.margins = [0,0,0,0];
+    grpBelow.spacing = 0;
+    grpBelow.orientation = 'row';
+    grpBelow.preferredSize = [620, 50];
+    grpBelow.alignChildren = 'left';
+    var grpLeft = grpBelow.add('group');
+    grpLeft.orientation = 'column';
+    grpLeft.preferredSize = [170, 50];
+    grpLeft.alignChildren = 'left';
+    grpLeft.spacing = 0;
+    grpLeft.margins = [0,0,0,0];
+    var grpMiddle = grpBelow.add('group');
+    grpMiddle.orientation = 'column';
+    grpMiddle.preferredSize = [270, 50];
+    grpMiddle.spacing = 0;
+    grpMiddle.margins = [0,0,0,0];
+    var grpRight = grpBelow.add('group');
+    grpRight.preferredSize = [170, 50];
+    grpRight.orientation = 'column';
+    grpRight.alignment = 'right';
+    grpRight.alignChildren = 'right';
+    grpRight.margins = [0,0,0,0];
+    grpRight.spacing = 0;
+    grpRight.spacing = 0;
+    grpRight.margins = [0,0,0,0];
+    
+    // Add Map button
+    var btnAddNewMap = grpMiddle.add('iconbutton', undefined, (SCRIPTPATH+'images/add.png'), {style:'button'});
+    btnAddNewMap.onClick = function() {
+      (function () {
+        updatePrefs();
+        dialogState.setState( '__ADD__' );
+        prefs.rows.push( new CRow() );
+        var maxPages = Math.ceil( prefs.rows.length / maxRows );
+        var maxOffset = ( maxPages - 1 ) * maxRows;
+        dialogState.setRowsOffset( maxOffset );
+        win.close();
+      })();
+    }
+    
+    var grpPager = grpMiddle.add('group');
+    grpPager.orientation = 'row';
+    
+    var i_prev = ScriptUI.newImage( new File(SCRIPTPATH+'images/pagerPrev.png'), new File(SCRIPTPATH+'images/pagerPrev_d.png'));
+    var btnPrev = grpPager.add('iconbutton', undefined, i_prev, {style:'toolbutton'});
+    btnPrev.onClick = function() {
+      (function () {
+      updatePrefs();
+      dialogState.setState('__OFFSET_ROWS__');
+      dialogState.setRowsOffset(dialogState.getRowsOffset() - maxRows);
+      })();
+      win.close();
+    }
+    btnPrev.enabled = (current_page != 1);
+    
+    grpPager.add('statictext', undefined, 'Page '+current_page+'/'+maxPages);
+    
+    var i_next = ScriptUI.newImage( new File(SCRIPTPATH+'images/pagerNext.png'), new File(SCRIPTPATH+'images/pagerNext_d.png'));
+    var btnNext = grpPager.add('iconbutton', undefined, i_next, {style:'toolbutton'});
+    
+    btnNext.onClick = function() {
+      (function () {
+        updatePrefs();
+        dialogState.setState('__OFFSET_ROWS__');
+        dialogState.setRowsOffset(dialogState.getRowsOffset() + maxRows);
+      })();
+      win.close();
+    } 
+    btnNext.enabled = (maxPages != current_page);
+
+    var grpMapsPerPage = grpMiddle.add('group');
+    grpMapsPerPage.orientation = 'row';
+    grpMapsPerPage.add('statictext', undefined, 'Maps p. page:');
+    var dlist_mapsPerPage = grpMapsPerPage.add('dropdownlist');
+    
+    // dlist_mapsPerPage.add('item', 'Maps Per Page...');
+    dlist_mapsPerPage.add('item', '1');
+    dlist_mapsPerPage.add('item', '2');
+    dlist_mapsPerPage.add('item', '3');
+    dlist_mapsPerPage.add('item', '4');
+    dlist_mapsPerPage.add('item', '5');
+    dlist_mapsPerPage.add('item', '6');
+    dlist_mapsPerPage.add('item', '7');
+    dlist_mapsPerPage.add('item', '8');
+    dlist_mapsPerPage.add('item', '9');
+    
+    dlist_mapsPerPage.selection = prefs.qsmPrefs.getMapsPerPage() - 1;
+    
+    dlist_mapsPerPage.onChange = ( function() {
+      return function() {
+        dialogState.setState('CHANGE_MAPS_PER_PAGE');
+        dialogState.setRowsOffset(0);
+        updatePrefs();
+        prefs.qsmPrefs.setMapsPerPage( Number( dlist_mapsPerPage.selection ) + 1 );
+        writeQSM(QSMINIPATH, prefs.qsmPrefs);
+        win.close();
+      }
+    } )();
+    
+    //grpMapsPerPage.add('statictext', undefined, 'Jump to...');
+    var dlist_jumpTo = grpMapsPerPage.add('dropdownlist');
+    dlist_jumpTo.preferredSize = [100, 20];
+    
+    dlist_jumpTo.add('item', 'Jump to...');
+    // ( ( currentOffset + 1 ) * maxRows );
+    for ( var i = 0; i < prefs.rows.length; i++ )
+    {
+      var name = prefs.rows[i].getName() ? prefs.rows[i].getName() : '[no name]';
+      dlist_jumpTo.add( 'item', name );
+    }
+    dlist_jumpTo.selection = 0;
+    dlist_jumpTo.onChange = ( function() {
+      return function() {
+        index = dlist_jumpTo.selection.index;
+        if ( index > 0 )
+        {
+          var nOffset = Math.floor( ( index - 1 ) / maxRows ) * maxRows;
+          if (nOffset != currentOffset)
+          {
+            updatePrefs();
+            dialogState.setRowsOffset( nOffset );
+            dialogState.setState( '__JUMP_TO__' );
+            win.close();
+          }
+          else
+          {
+            alert("Already on page!");
+          }
+        }
+      }
+    } )();
+    
+    
+    var grpSaveClose = grpRight.add('group');
+    grpSaveClose.preferredSize = [80, 50];
+    grpSaveClose.alignment = 'right';
+    grpSaveClose.alignChildren = 'right';
+    grpSaveClose.margins = [0,0,0,0];
+    grpSaveClose.orientation = 'column';
+    grpSaveClose.spacing = 0;
+    
+    var btnSave = grpSaveClose.add('button', undefined, 'Save');
+    btnSave.preferredSize = [100, 24];
+    btnSave.onClick = (function(){
+      return function() {
+        var proceed = {state:true};
+        // Switch to normal config mode
+        newYouSureWindow('You are about to overwrite any previously existing configurations. Are you sure?', proceed, prefs, chkConfirmDialogs)();
+        if (proceed.state) { 
+          dialogState.setState('SAVE_ONLY');
+          updatePrefs();
+          if (prefs.qsmPrefs.getEnablePSD()) {
+            if (!writePreferences(prefs, Enums.storageModes.PSD, {path : PSDPROPERTY})) {
+              alert("There was a problem saving your configration file", 'Preferences')
+            }
+          } else {
+            if (!writePreferences(prefs, Enums.storageModes.CFG, {path : MAINCFGPATH})) {
+              alert("There was a problem saving your configration file", 'Preferences')
+            }
+          }
+          
+          win.close();
+        }
+      }
+    })();
+    var btnSaveAndClose = grpSaveClose.add('button', undefined, 'Save and Close');
+    btnSaveAndClose.preferredSize = [100, 24];
+    btnSaveAndClose.onClick = (function(){
+      return function() {
+        var proceed = {state:true};
+        // Switch to normal config mode
+        newYouSureWindow('You are about to overwrite any previously existing configurations. Are you sure?', proceed, prefs, chkConfirmDialogs)();
+        if (proceed.state) {
+          updatePrefs();
+          if (prefs.qsmPrefs.getEnablePSD()) {
+            if (writePreferences(prefs, Enums.storageModes.PSD, {path : PSDPROPERTY})) {
+              win.close();
+            } else {
+              alert("There was a problem saving your configration file", 'Preferences')
+            }
+          } else {
+            if (writePreferences(prefs, Enums.storageModes.CFG, {path : MAINCFGPATH})) {
+              win.close();
+            } else {
+              alert("There was a problem saving your configration file", 'Preferences')
+            }
+          }
+        }
+      }
+    })();
+    
+    var btnCancel = grpSaveClose.add('button', undefined, 'Close');
+    btnCancel.preferredSize = [100, 24];
+    btnCancel.onClick = (function(){
+      return function() {
+        var proceed = {state:true};
+        // Switch to normal config mode
+        newYouSureWindow('You are about to close the dialog and forget about all the changes you made, are you absolutely sure?', proceed, prefs, chkConfirmDialogs)();
+        if (proceed.state) {
+          win.close();
+        }
+      }
+    })();
+    
+    var btnPSD = grpLeft.add('iconbutton', undefined, undefined, {style:'toolbutton', toggle:false});
+    var i = ScriptUI.newImage( new File(SCRIPTPATH+'images/psdON.png'));
+    var i1 = ScriptUI.newImage( new File(SCRIPTPATH+'images/psdOFF.png'));
+
+    var toggleStatePSD = prefs.qsmPrefs.getEnablePSD();
+    if (toggleStatePSD) btnPSD.notify('onClick')
+    btnPSD.image = toggleStatePSD ? i : i1;
+    btnPSD.helpTip = 'Save settings to PSD';
+    
+    btnPSD.onClick = (function () {
+      return function() {
+        var proceed = {state:true}; // Make it an object so we can pass by reference...
+        // Switch to normal config mode
+        if (toggleStatePSD == true) {
+          newYouSureWindow('You are about to switch to normal config-file storage. This will replace you current settings with those stored in the configuration file. Any unsaved changes you made will be lost. Are you sure you want that?', proceed, prefs, chkConfirmDialogs)();
+          if (proceed.state) {
+            if (!readPreferences(prefs, Enums.storageModes.CFG, {path: MAINCFGPATH})) {
+              readPreferences(prefs, Enums.storageModes.GENERATE);
+            }
+            dialogState.setState('__LOAD_FROM_CFG__');
+            prefs.qsmPrefs.setEnablePSD(false);
+            writeQSM(QSMINIPATH, prefs.qsmPrefs);
+            win.close();
+          } else {
+            // Reset the toggle state!
+            var tmp = btnPSD.onClick;
+            btnPSD.onClick = null;
+            btnPSD.notify ();
+            btnPSD.notify ('onClick');
+            btnPSD.onClick = tmp;
+          }
+        }
+        // Switch to PSD mode
+        else {
+          var valid = true;
+          try {
+            var AD = app.activeDocument;
+          } catch (e) {
+            alert('You must have a document open in order to switch to PSD mode.');
+            valid = false;
+          }
+          if (valid) {
+            newYouSureWindow('You are about to switch to PSD storage. This will replace your current settings with those stored in the PSD. Any unsaved changes you made will be lost. Are you sure you want that?', proceed, prefs, chkConfirmDialogs)();
+            if (proceed.state) {
+              if (!readPreferences(prefs, Enums.storageModes.PSD, {path: PSDPROPERTY})) {
+                readPreferences(prefs, Enums.storageModes.GENERATE);
+              }
+              dialogState.setState('__LOAD_FROM_PSD__');
+              prefs.qsmPrefs.setEnablePSD(true);
+              writeQSM(QSMINIPATH, prefs.qsmPrefs);
+              win.close();
+            }
+          } else {
+            // Reset the toggle state!
+            var tmp = btnPSD.onClick;
+            btnPSD.onClick = null;
+            btnPSD.notify ('onClick');
+            btnPSD.onClick = tmp;
+          }
+        }
+        
+      }
+    })();
+    
+    var chkConfirmDialogs = grpLeft.add('checkbox', undefined, 'Display confirmation dialogs');
+    chkConfirmDialogs.alignment = 'left';
+    chkConfirmDialogs.margins = [0,0,0,0];
+    chkConfirmDialogs.spacing = 10;
+    chkConfirmDialogs.value = prefs.qsmPrefs.getEnableConfirmationDialogs();
+    chkConfirmDialogs.onClick = function() {
+      prefs.qsmPrefs.setEnableConfirmationDialogs(chkConfirmDialogs.value);
+      writeQSM(QSMINIPATH, prefs.qsmPrefs);
+    }
+    
+    // Debugging
+    if ($.level || DEBUG) {
+      var grpMainButtons = win.add('group');
+      grpMainButtons.orientation = 'row';
+      grpMainButtons.add('button', undefined, 'Spritverbrauch').onClick = function() {
+        alert($.summary());
+        (function () {
+          updatePrefs();
+          //dialogState.setState('__OFFSET_ROWS__');
+          //win.close();
+        })();
+      }
+    }
+    
+    // Update the prefs by reading them back from the UI
+    var updatePrefs = (function() {
+      return function() {
+        // Update Defaults
+        if (!prefs.qsmPrefs.getHideDefaults()) {
+          // Basename
+          prefs.defaults.setUseCustomBasename(chkDefaultsUseCustomBasename.value);
+          prefs.defaults.setBasename(etxt_defaultsCustomName.text);
+          // Path
+          prefs.defaults.setUseCustomPath(chkDefaultsUseCustomPath.value);
+          prefs.defaults.setPath(etxt_defaultsCustomPath.text);
+          prefs.defaults.setIsRelativePath(chkDefaultsUseRelativePath.value);
+          // Resampler
+          var resamplerKey = listDefaultsResample.selection.properties.keyname;
+          prefs.defaults.setResampler(Enums.resampler[resamplerKey]);
+          // Format
+          var formatKey = grpDefaultsFormat['listFormats'].selection.properties.keyname;
+          prefs.defaults.getFormat().setFormatInUse(Enums.formats[formatKey]);
+          prefs.defaults.getFormat().setIsUsedAlpha(chkDefaultsSaveAlpha.value);
+        }
+        
+        // Update Rows
+        for (var i = currentOffset; i < currentMax; i++) {
+          var pnlRow = grpRow[i];
+          var grp_1 = pnlRow['grp_1'];
+          var grp_2 = pnlRow['grp_2'];
+          var grp_3 = pnlRow['grp_3'];
+          var grp_4 = pnlRow['grp_4'];
+          var row = prefs.rows[i];
+          
+          // grp_1 -- Name and Convention
+          row.setName( grp_1['lookfor'].text );
+          row.setBasename( grp_1['basename'].text );
+          row.setConvention( grp_1['convention'].text );
+          
+          // grp_2 -- Scale
+          row.setScale( grp_2['grpScale']['etxt_scale'].text );
+          row.setIsScaleFixed( ( grp_2['grpScale']['listScale'].selection == 4 ) );
+          row.setScaleX( grp_2['grpScaleFixed']['etxtFixedWidth'].text );
+          row.setScaleY( grp_2['grpScaleFixed']['etxtFixedHeight'].text );
+          
+          var resamplerKey = grp_2['listResample'].selection.properties.keyname;
+          row.setResampler(Enums.resampler[resamplerKey]);
+          
+          // grp_3 -- Format and conversion
+          var formatKey = grp_3['grpFormat']['listFormats'].selection.properties.keyname;
+          row.getFormat().setFormatInUse(Enums.formats[formatKey]);
+          row.getFormat().setIsUsedAlpha(grp_3['chkSaveAlpha'].value);
+          
+          // CONVERSIONS ARE OUT
+          //var conversionKey = grp_3['formatGroup']['convert'].selection.properties.keyname;
+          //prefs.rows[i].getFormat().setConversion(Enums.conversions[conversionKey]);
+          
+          // grp_4 -- Channel replacement
+          var composeRGB = row.getComposeRGB();
+          // red
+          composeRGB.setLayerRed( grp_4['grpRed']['etxtRed'].text );
+          composeRGB.setIsUsedLayerRed( grp_4['grpRed']['chkRed'].value );
+
+          // green
+          composeRGB.setLayerGreen( grp_4['grpGreen']['etxtGreen'].text );
+          composeRGB.setIsUsedLayerGreen( grp_4['grpGreen']['chkGreen'].value );
+
+          // blue
+          composeRGB.setLayerBlue( grp_4['grpBlue']['etxtBlue'].text );
+          composeRGB.setIsUsedLayerBlue( grp_4['grpBlue']['chkBlue'].value );
+          
+          // alpha
+          row.getFormat().setIsUsedAlphaLayer(grp_4['grpAlpha']['chkAlpha'].value);
+          row.getFormat().setAlphaLayer(grp_4['grpAlpha']['etxtAlpha'].text);
+        }
+      }
+    })();
+
+    // Done loading, hide loading win
+    this.hideLoader();
+    
+    // Initialize the window
+    win.show();
+    
+    // Clean up
+    removeAllEvents(win);
+    updatePrefs = null;
+    win = null;
+  }
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//// HELPER FUNCTIONS
+/////////////////////////////////////////////////////////////////////
+
+// Helper function to kill circular references. Modifies the element.
+// Returns true if successful
+function removeAllEvents(element) {
+  delete element.onClick;
+  element.onClick = null;
+  delete element.onChange;
+  element.onChange = null;
+  for (var i = 0, ii = element.children.length; i < ii; i++)
+  {
+    delete element.children[i].onClick;
+    element.children[i].onClick = null;
+    delete element.children[i].onChange;
+    element.children[i].onChange = null;
+    if (element.children[i].children !== undefined)
+    {
+      removeAllEvents(element.children[i]);
+    }
+    delete element.children[i];
+  }
+  return true;
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//// FUNCTIONS MISC.
+/////////////////////////////////////////////////////////////////////
+
+// Function to add a new layer group to the
+function addLayerToDocument(name) {
+  var AD = app.activeDocument;
+  var layerSets = AD.layerSets;
+  var hasFoundLayer = searchChildrenLayerSets(name, AD);
+  if (hasFoundLayer != true)
+  {
+    var newLayerSet = AD.layerSets.add();
+    newLayerSet.name = name;
+    atnNewFillLayer(0,0,0);
+    AD.activeLayer.name = "base";
+  }
+}
+
+// Function to get info about all actions known to Photoshop
+// This function is borrowed from the Scripts Event Manager!
+function GetActionSetInfo() {
+	var actionSetInfo = new Array();
+	var setCounter = 1;
+	while ( true ) {
+		var ref = new ActionReference();
+		ref.putIndex( gClassActionSet, setCounter );
+    
+		var desc = undefined;
+		try { desc = executeActionGet( ref ); }
+		catch( e ) { break; }
+		var actionData = new ActionData();
+		if ( desc.hasKey( gKeyName ) ) {
+			actionData.name = desc.getString( gKeyName );
+		}
+		var numberChildren = 0;
+		if ( desc.hasKey( gKeyNumberOfChildren ) ) {
+			numberChildren = desc.getInteger( gKeyNumberOfChildren );
+		}
+		if ( numberChildren ) {
+			actionData.children = GetActionInfo( setCounter, numberChildren );
+			actionSetInfo.push( actionData );
+		}
+		setCounter++;
+	}
+	return actionSetInfo;
+}
+
+// Function to get the Action Data
+// This could be an action set or an action
+// This function is borrowed from the Scripts Event Manager!
+function ActionData() {
+	this.name = "";
+	this.children = undefined;
+	this.toString = function () {
+		var strTemp = this.name;
+		if ( undefined != this.children ) {
+			for ( var i = 0; i < this.children.length; i++ ) {
+				strTemp += " " + this.children[i].toString();
+			}
+		}
+		return strTemp;
+	}
+}
+
+// Function to get the Action Info
+// used when walking through all the actions in the action set
+// This function is borrowed from the Scripts Event Manager!
+function GetActionInfo( setIndex, numChildren ) {
+	var actionInfo = new Array();
+	for ( var i = 1; i <= numChildren; i++ ) {
+		var ref = new ActionReference();
+		ref.putIndex( gClassAction, i );
+		ref.putIndex( gClassActionSet, setIndex );
+		var desc = undefined;
+		desc = executeActionGet( ref );
+		var actionData = new ActionData();
+		if ( desc.hasKey( gKeyName ) ) {
+			actionData.name = desc.getString( gKeyName );
+		}
+		var numberChildren = 0;
+		if ( desc.hasKey( gKeyNumberOfChildren ) ) {
+			numberChildren = desc.getInteger( gKeyNumberOfChildren );
+		}
+		actionInfo.push( actionData );
+	}
+	return actionInfo;
+}
+
+/////////////////////////////////////////////////////////////////////
+//// UTILITY ACTIONS
+/////////////////////////////////////////////////////////////////////
+
+// Action to add a new Solid-Color-Chip layer
+// Credit goes to "Patrick" on ps-scripts.com
+function atnNewFillLayer(r,g,b) { 
+   var id133 = charIDToTypeID( "Mk  " );
+       var desc30 = new ActionDescriptor();
+       var id134 = charIDToTypeID( "null" );
+           var ref13 = new ActionReference();
+           var id135 = stringIDToTypeID( "contentLayer" );
+           ref13.putClass( id135 );
+       desc30.putReference( id134, ref13 );
+       var id136 = charIDToTypeID( "Usng" );
+           var desc31 = new ActionDescriptor();
+           var id137 = charIDToTypeID( "Type" );
+               var desc32 = new ActionDescriptor();
+               var id138 = charIDToTypeID( "Clr " );
+                   var desc33 = new ActionDescriptor();
+                   var id139 = charIDToTypeID( "Rd  " );
+                   desc33.putDouble( id139, r );
+                   var id140 = charIDToTypeID( "Grn " );
+                   desc33.putDouble( id140, g );
+                   var id141 = charIDToTypeID( "Bl  " );
+                   desc33.putDouble( id141, b );
+               var id142 = charIDToTypeID( "RGBC" );
+               desc32.putObject( id138, id142, desc33 );
+           var id143 = stringIDToTypeID( "solidColorLayer" );
+           desc31.putObject( id137, id143, desc32 );
+       var id144 = stringIDToTypeID( "contentLayer" );
+       desc30.putObject( id136, id144, desc31 );
+   executeAction( id133, desc30, DialogModes.NO );
+}

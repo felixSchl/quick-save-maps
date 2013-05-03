@@ -1,0 +1,236 @@
+///////////////////////////////////////////////////////////////////////////////////////
+//
+//  Author:  Felix Schlitter
+//  Contact: felixSchlitter@gmail.com
+//  Website: www.felixSchlitter.com
+//	License: Creative Commons Attribution-ShareAlike 3.0 Unported
+//
+///////////////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////
+//// CLASSES
+/////////////////////////////////////////////////////////////////////
+
+// Class to handle Log Dialog Window
+function CLogDialog() {
+  var logXML = new XML(readFileString(new File(LOGPATH)));
+  var log = new CLog(logXML);
+  var entries = log.getEntries();
+  var win;
+  var bHasEntries = false;
+  var fLoc = {x:0, y:0};
+  
+  this.makeDialog = function(bShow) {
+    if (bShow === undefined) bShow = true;
+  
+    win = new Window('dialog', 'Quick Save Maps Log Viewer');
+    win.preferredSize = [500, 200];
+    win.alignChildren = 'left';
+    
+    // Restore frame location
+    try{
+      var desc = app.getCustomOptions(cTID("qsmL"));
+      fLoc = {x: desc.getDouble(cTID("FLCX")), y: desc.getDouble(cTID("FLCY"))};
+    } catch(e) { 
+      fLoc = undefined;
+    }
+    // Set frame location
+    if (fLoc !== undefined) {
+      win.frameLocation = fLoc;
+    } else {
+      win.center();
+      fLoc = win.frameLocation;
+    }
+    
+    if (bShow) {
+      win.onClose = function() {
+        var desc_out = new ActionDescriptor();
+        desc_out.putDouble(cTID("FLCX"), win.frameLocation[0]);
+        desc_out.putDouble(cTID("FLCY"), win.frameLocation[1]);
+        app.putCustomOptions(cTID("qsmL"), desc_out, 1);
+      }
+    }
+    
+    var grpMain = win.add('group');
+    grpMain.orientation = 'row';
+    grpMain.alignChildren = 'top';
+    
+    // Left group (list)
+    var grpEntries = grpMain.add('group');
+    grpEntries.orientation = 'column';
+    var listEntries = grpEntries.add( 'listbox', undefined, undefined, {name: 'listEntries', multiselect: false} );
+    listEntries.preferredSize = [400, 150];
+    
+    for (var i = (entries.length - 1); i >= 0; i --) {
+      var entry = entries[i];
+      var properties = entry.getProperties();
+      var name = properties.getName() ? (properties.getName()) : ('?');
+      var location = properties.getLocation() ? (properties.getLocation()) : ('?');
+      var filename = properties.getFileName() ? (properties.getFileName()) : ('?');
+      var entry_text = name + ' ('+filename+')';
+      listEntries.add('item', entry_text, undefined, {entry: entry});
+    }
+    
+    listEntries.selection = 0;
+    listEntries.onChange = (function() {
+      return function() {
+        listErrors.removeAll();
+        
+        if (listEntries.selection) {
+          var errors = listEntries.selection.properties.entry.getErrors();
+          for (var i = 0, ii = errors.length; i < ii; i++) {
+            var error = errors[i];
+            listErrors.add('item', (i+1) + ': ' + error.getName(), undefined, {error : error});
+          }
+          listErrors.selection = 0;
+        }
+        refresh();
+      }
+    })();
+    
+    var grpActions = grpMain.add('group');
+    grpActions.orientation = 'column';
+    
+    var btnOpen = grpActions.add('button', undefined, 'Open Map');
+    btnOpen.onClick = function() {
+      var imgFile = listEntries.selection.properties.entry.getProperties().getImageFile();
+      app.open(imgFile);
+    }
+    
+    var btnView = grpActions.add('button', undefined, 'View Map');
+    btnView.onClick = function() {
+      var imgFile = listEntries.selection.properties.entry.getProperties().getImageFile();
+      imgFile.execute();
+    }
+    
+    var btnFolder = grpActions.add('button', undefined, 'Open Folder');
+    btnFolder.onClick = function() {
+      var imgFolder = listEntries.selection.properties.entry.getProperties().getImageFolder();
+      imgFolder.execute();
+    }
+    
+    var btnRemove = grpActions.add('button', undefined, 'Remove');
+    btnRemove.onClick = function() {
+      listEntries.remove(listEntries.selection.index);
+      listEntries.selection = 0;
+      bHasEntries = listEntries.items.length ? true : false;
+      listEntries.onChange();
+    }
+    
+    var btnRemoveAll = grpActions.add('button', undefined, 'Remove All');
+    btnRemoveAll.onClick = function() {
+      listEntries.removeAll();
+      bHasEntries = listEntries.items.length ? true : false;
+      listEntries.onChange();
+    }
+    
+    var grpDetails = win.add('group');
+    var pnlDetails = grpDetails.add('panel', undefined, 'Details');
+    pnlDetails.preferredSize = [490, 150];
+    pnlDetails.alignChildren = 'left';
+    pnlDetails.spacing = 5;
+    
+    pnlDetails.add('statictext', undefined).preferredSize = [5,5];
+    
+    var txtTimeTaken = pnlDetails.add('statictext', undefined, '');
+    txtTimeTaken.preferredSize = [260, 20];
+    //var txtTimeStamp = pnlDetails.add('statictext', undefined, '');
+    //txtTimeStamp.preferredSize = [260, 20];
+    var txtErrors = pnlDetails.add('statictext', undefined, 'Errors:');
+    var listErrors = pnlDetails.add( 'listbox', undefined, undefined, {name: 'listErrors'});
+    
+    var pnlErrorDesc = pnlDetails.add('panel', undefined, 'Error description:');
+    pnlErrorDesc.add('statictext').preferredSize = [1, 1];
+    listErrors.onChange = function() {
+      refresh();
+    };
+    var txtErrorDescription = pnlErrorDesc.add('statictext', undefined, '', {multiline: true});
+    listErrors.preferredSize = [454, 130];
+    txtErrorDescription.preferredSize = [420, 100];
+    
+    // Do we have entries?
+    bHasEntries = listEntries.items.length ? true : false;
+    
+    var refresh = function() {
+      pnlDetails.enabled = listEntries.items.length;
+      grpMain.enabled = listEntries.items.length;
+      grpActions.enabled = listEntries.items.length;
+      
+      // Set all enabled / disabled / etc states here
+      if (bHasEntries) {
+        // Log entry is selected
+        if (listEntries.selection) {
+          // Retrieve properties of selected item
+          var properties = listEntries.selection.properties.entry.getProperties();
+        
+          // open image button
+          bFileExists = properties.getImageFile() ? true : false;
+          btnOpen.enabled = bFileExists;
+          btnOpen.helpTip = bFileExists ? '' : '[Image file not found...]';
+          btnView.enabled = bFileExists;
+          btnView.helpTip = bFileExists ? '' : '[Image file not found...]';
+          
+           // open folder button
+          bFolderExists = properties.getImageFolder() ? true : false;
+          btnFolder.enabled = bFolderExists;
+          btnFolder.helpTip = bFolderExists ? '' : '[Image file not found...]';
+
+          // details panel
+          txtTimeTaken.text = 'Time taken: ' + properties.getTimeTaken();
+          //txtTimeStamp.text = 'Date saved: ' + properties.getDateSaved();
+          
+          var errors = listEntries.selection.properties.entry.getErrors();
+          listErrors.enabled = errors.length;
+          if (listErrors.selection) {
+            var desc = listErrors.selection.properties.error.getDescription() ? listErrors.selection.properties.error.getDescription() : 'N/A';
+            txtErrorDescription.text = desc;
+          } else {
+            txtErrorDescription.text = 'None Selected...';
+          }
+          txtErrorDescription.enabled = listErrors.items.length;
+        }
+        // No Log Entry selected
+        else {
+          txtTimeTaken.text = 'Time taken: N/A';
+          //txtTimeStamp.text = 'Date saved: N/A';
+          txtErrorDescription.text = '';
+          grpActions.enabled = false;
+          pnlDetails.enabled = false;
+        }
+      }
+      else {
+        // Log is empty
+        listEntries.add('item', 'Log is empty. Save some maps :)');
+        txtTimeTaken.text = 'Time taken: N/A';
+        //txtTimeStamp.text = 'Date saved: N/A';
+        txtErrorDescription.text = '';
+      }
+    }
+    
+    // initialize
+    listEntries.onChange();
+    
+    // Clean up
+    win.onClose = function() {
+      // Write changes to file
+      var newLog = new CLog();
+      if (bHasEntries) {
+        for (var i = (listEntries.items.length - 1); i >= 0; i --) {
+          var newEntry = newLog.addEntry(listEntries.items[i].properties.entry);
+        }
+      }
+      writeLog(newLog);
+      win = null;
+      refresh = null;
+    }
+    
+    if (bShow) {
+      win.show();
+    } else {
+      return win;
+    }
+    
+    
+  }
+
+}
