@@ -32,6 +32,10 @@ function saveMaps(mode, kwargs) {
   try {
 	  var AD = app.activeDocument;
 	  var AL = AD.activeLayer;
+      var rulerUnits = app.preferences.rulerUnits;
+      var typeUnits = app.preferences.typeUnits;
+      app.preferences.rulerUnits = Units.PIXELS
+      app.preferences.typeUnits = TypeUnits.PIXELS
 	} catch(error) {
 		spitDocError(error);
 	  return;
@@ -669,6 +673,9 @@ function saveMaps(mode, kwargs) {
 
     // Reset history and document
     app.activeDocument = AD;
+    app.preferences.rulerUnits = rulerUnits;
+    app.preferences.typeUnits = typeUnits;
+
     try {
       AD.activeHistoryState = history_per_row;
     } catch (e) {}
