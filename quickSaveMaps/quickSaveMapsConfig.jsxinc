@@ -1366,7 +1366,7 @@ function CDialog(pPrefs, pDialogState) {
           }
 
           element['grpDefaultsFormat']['editFormat'].onClick = (function(format){
-            return newCallback(format, undefined);
+            return newCallback(format, undefined, prefs);
           })(format);
         }
       })(grpDefaultsFormatSuper, editFormatCallback);
@@ -1377,13 +1377,12 @@ function CDialog(pPrefs, pDialogState) {
       btnEditFormat.onClick = (function(listFormats){
         return function() {
           var index = listFormats.selection.index;
-          alert(index)
           var keyname = listFormats.items[index].properties.keyname;
           var format = Enums.formats[keyname];
           return editFormatCallback(format, undefined, prefs); // send format and 'undefined' as row_id
         }
       })(listFormats); // send dropdown list
-      
+
       // Defaults : Alpha and processing
       var grpDefaultsAlpha = grpDefaultsFormatSuper.add('group', undefined, {name: 'grpDefaultsAlpha'});
       grpDefaultsAlpha.orientation = 'column';
@@ -1664,45 +1663,6 @@ function CDialog(pPrefs, pDialogState) {
 
       listFormats.selection = row.getFormat().getFormatInUse().id;
       
-      /*
-      listFormats.onChange = (function(element, newCallback, row_index) {
-        return function() {
-          var list = element['grp_3']['formatGroup']['listFormats'];
-          var index = list.selection.index;
-          var keyname = list.items[index].properties.keyname;
-          var format = Enums.formats[keyname];
-
-          switch(format) {
-            case Enums.formats.DEFAULT:
-              element['grp_3']['formatGroup']['editFormat'].enabled = false;
-              break;
-            case Enums.formats.JPG:
-              element['grp_3']['formatGroup']['editFormat'].enabled = true;
-              break;
-            default:
-              element['grp_3']['formatGroup']['editFormat'].enabled = true;
-              break;
-          }
-          
-          //element['grp_4']['saveAlpha'].onClick();
-          
-          // Don't allow DDS on MAC
-          if ( ! ISWINDOWS ) {
-            if ( format == Enums.formats.DDS )
-            {
-              alert(NOTAVAILMACMSG);
-              list.selection = 0;
-            }
-          }
-          
-          // Change the onClick callback
-          element['grp_3']['formatGroup']['editFormat'].onClick = (function(format, row_index){
-            return newCallback(format, row_index);
-          })( format, row_index );
-        }
-      })(pnlRow, editFormatCallback, i );
-      */
-      
       // Rows : Edit the format
       var btnEditFormat = grpFormat.add('button', undefined, 'Format settings', {name: 'editFormat'});
       btnEditFormat.preferredSize = [85, editTextHeight+2];
@@ -1714,7 +1674,7 @@ function CDialog(pPrefs, pDialogState) {
           var index = listFormats.selection.index;
           var keyname = listFormats.items[index].properties.keyname;
           var format = Enums.formats[keyname];
-          return editFormatCallback(format, row_index, prefs); // send format and 'undefined' as row_id
+          return editFormatCallback(format, row_index, prefs);
         }
       })(listFormats, i); // send dropdown list
       
