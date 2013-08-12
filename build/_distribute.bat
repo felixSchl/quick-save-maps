@@ -7,15 +7,17 @@
 ::
 :: This script assembles QuickSaveMaps for distribution.
 :: For your own distribution, adjust the variables 
-:: "XMNGR" and "WINRAR" below.
+:: "XMNGR" and "ZIP7" below.
 ::
 :://///////////////////////////////
+REM GO TO ROOT
+CD /D ".."
 
 REM SET GLOBALS
-SET DEST=QSM-v0.6.4
+SET "DEST=QSM-REV-%1"
+SET "XMNGR=%2"
+SET "ZIP7=%3"
 SET FLAGS=/Y
-SET XMNGR="C:\Program Files (x86)\Adobe\Adobe Extension Manager CS5\Adobe Extension Manager CS5.exe"
-SET ZIP7="C:\Program Files\7-Zip\7z.exe"
 
 REM CREATE MXP
 %XMNGR% -suppress -package mxi=QuickSaveMaps.mxi mxp=QuickSaveMaps.mxp
