@@ -1018,7 +1018,7 @@ function CDialog(pPrefs, pDialogState) {
     dialogState.setState('__FINISHED__');
 
     // Main window
-    win = new Window('dialog', 'QSM version '+VERSION+' - By Felix Schlitter --- www.FelixSchlitter.com', undefined, {resizeable: false});
+    win = new Window('dialog', 'QSM '+VERSION+' - By Felix Schlitter --- www.FelixSchlitter.com', undefined, {resizeable: false});
     win.graphics.font = ScriptUI.newFont ("Arial", "REGULAR", 12);
     
     win.preferredSize = [diagWidth, null];

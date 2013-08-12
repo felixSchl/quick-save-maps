@@ -1,15 +1,4 @@
 @ECHO OFF
-
-:://////////////////////////////////
-::
-:: Quick Save Maps packaging tool
-:: ==============================
-::
-:: This script assembles QuickSaveMaps for distribution.
-:: For your own distribution, adjust the variables 
-:: "XMNGR" and "ZIP7" below.
-::
-:://///////////////////////////////
 REM GO TO ROOT
 CD /D ".."
 
