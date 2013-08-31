@@ -15,7 +15,7 @@ var DEBUG = 0;
 //// MAGIC NUMBERS AND STRING LITERALS
 /////////////////////////////////////////////////////////////////////
 
-var VERSION = 'rev. 5';
+var VERSION = 'rev. 6';
 var SCRIPTPATH = getSourcePath();
 var APPDATA = Folder.userData+'/QuickSaveMaps/';
 var MAINCFGPATH = APPDATA+"config.cfg";

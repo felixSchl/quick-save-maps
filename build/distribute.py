@@ -84,7 +84,7 @@ def adaptVersion(version):
 
 def process():
     tools = parseIni()
-    version = "5" # getVersion()
+    version = getVersion()
     adaptVersion(version)
     cmd = '_distribute.bat {version} "{xmngr}" "{zip7}"'.format(
                 version=version,
