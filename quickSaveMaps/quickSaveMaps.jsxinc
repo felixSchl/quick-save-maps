@@ -3,7 +3,7 @@
 //  Author:  Felix Schlitter
 //  Contact: felixSchlitter@gmail.com
 //  Website: www.felixSchlitter.com
-//	License: Creative Commons Attribution-ShareAlike 3.0 Unported
+//  License: Creative Commons Attribution-ShareAlike 3.0 Unported
 //
 ///////////////////////////////////////////////////////////////////////////////////////
 
@@ -30,16 +30,16 @@ function saveMaps(mode, kwargs) {
   
   // Check state of document
   try {
-	  var AD = app.activeDocument;
-	  var AL = AD.activeLayer;
+      var AD = app.activeDocument;
+      var AL = AD.activeLayer;
       var rulerUnits = app.preferences.rulerUnits;
       var typeUnits = app.preferences.typeUnits;
       app.preferences.rulerUnits = Units.PIXELS
       app.preferences.typeUnits = TypeUnits.PIXELS
-	} catch(error) {
-		spitDocError(error);
-	  return;
-	}
+    } catch(error) {
+        spitDocError(error);
+      return;
+    }
   
   // See if document was saved
   try {
@@ -50,17 +50,17 @@ function saveMaps(mode, kwargs) {
   }
   
   // Set Histories and Layercomp
-	try{
-	  // original history
-		var originalHistory = AD.activeHistoryState;
-		var uniqueID = (new Date).getTime();
-		var lyrCompName = "QSM_TMP_LYRCOMP_"+uniqueID;
-		AD.layerComps.add(lyrCompName,"FOR QUICK SAVE MAPS RESTORE", 1, 1, 1);
-		var my_layerComp = AD.layerComps.getByName(lyrCompName);
-	} catch(error) {
+    try{
+      // original history
+        var originalHistory = AD.activeHistoryState;
+        var uniqueID = (new Date).getTime();
+        var lyrCompName = "QSM_TMP_LYRCOMP_"+uniqueID;
+        AD.layerComps.add(lyrCompName,"FOR QUICK SAVE MAPS RESTORE", 1, 1, 1);
+        var my_layerComp = AD.layerComps.getByName(lyrCompName);
+    } catch(error) {
     spitDocError(error);
-	  return;
-	}
+      return;
+    }
   
   progwin.updateProgress('Reading preferences...', 5);
   
@@ -530,7 +530,7 @@ function saveMaps(mode, kwargs) {
         }
       }
     }
-    
+
     // Row: Row specific preprocessing
     if (rowPreProcessor.getIsUsed()) {
       progwin.updateProgress(progress_text+'Pre-processing...', (current_progress + (percent_per_row * (i+1))) * (3/num_steps));
@@ -548,7 +548,7 @@ function saveMaps(mode, kwargs) {
         }
       }
     }
-    
+
     // Row: The filename
     var saveFile = new File(token_path + token_row_basename + token_convention + '.' + token_extension);
     progwin.updateProgress(progress_text+'Saving file...', (current_progress + (percent_per_row * (i+1))) * (4/num_steps));
@@ -573,7 +573,7 @@ function saveMaps(mode, kwargs) {
       if (!folder.exists) {
         folder.create();
       }
-      
+
       if ( rowFormat.getFormatInUse() == Enums.formats.PNG )
       {
         tempDoc.exportDocument( saveFile, ExportType.SAVEFORWEB, saveoptions );
@@ -616,32 +616,46 @@ function saveMaps(mode, kwargs) {
         }
 
       }
-      else if ( rowFormat.getFormatInUse() == Enums.formats.CRYTIF )
+      else if (rowFormat.getFormatInUse() == Enums.formats.CRYTIF)
       {
+        var outTif = null;
         try {
-          atnLaunchCryTifDialog( token_path );
-        } catch (e)
+            atnLaunchCryTifDialog_1(token_path);
+            outTif = new File(token_path+'/'+TEMPDOCNAME+' copy.tif');
+        }
+        catch (e)
         {
-          if ( mode == Enums.saveModes.SINGLE || mode == Enums.saveModes.INTERFACE )
-          {
-            alert("The cryTIF plugin is not available. Please make sure it is installed. (Map: "+ row.getName() +")");
+          try {
+            atnLaunchCryTifDialog_2(token_path);
+            outTif = new File(token_path+'/'+TEMPDOCNAME+'.tif');
           }
-          else
+          catch (e)
           {
-             // Log that document could not be saved
-            logEntry.addError({
-              name: 'cryTIF plugin not found - map not saved.',
-              description: 'Please make sure that the crytek cryTIF plugin is installed before using this format.',
-            });
+            if (mode == Enums.saveModes.SINGLE
+                || mode == Enums.saveModes.INTERFACE)
+              {
+                  alert(
+                        'The cryTIF plugin is not available. '
+                      + 'Please make sure it is installed. '
+                      + '(Map: '+row.getName()+')'
+                      );
+              }
+              else
+              {
+                  logEntry.addError({
+                    name:        'cryTIF plugin not found - map not saved.',
+                    description: 'Please make sure that the crytek cryTIF '
+                               + 'plugin is installed before using this format.'
+                  });
+            }
           }
         }
-        // get a hold of saved file
-        var outTif = new File( token_path+'/'+TEMPDOCNAME+' copy.tif' );
-        if ( outTif.exists )
+
+        if (outTif.exists)
         {
-          var newName = ( token_row_basename + token_convention + '.tif' );
+          var newName = (token_row_basename + token_convention + '.tif');
           var renamedFile = new File( token_path + '/' + newName );
-          if ( renamedFile.exists )
+          if (renamedFile.exists)
           {
             renamedFile.remove();
           }
@@ -653,7 +667,7 @@ function saveMaps(mode, kwargs) {
         tempDoc.saveAs( saveFile, saveoptions, true, Extension.LOWERCASE );
       }
     } catch(e) {
-      // Log that document could not be saved
+
       logEntry.addError({
         name: 'The document could not be saved.',
         description: 'This is often caused if are accessing the same file from somewhere else or if you do not have the permissions to write to this file.',
@@ -1134,21 +1148,28 @@ function findNearestRowLayerCombo(rows, activeLayer, activeDocument) {
 /////////////////////////////////////////////////////////////////////
 
 // Function to launch the cryTIFdialog
-function atnLaunchCryTifDialog(location) {
-  // =======================================================
-var idsave = charIDToTypeID( "save" );
-    var desc24 = new ActionDescriptor();
-    var idAs = charIDToTypeID( "As  " );
-        var desc25 = new ActionDescriptor();
-        var idbarF = charIDToTypeID( "barF" );
-        desc25.putBoolean( idbarF, true );
-    var idCrytekCryTIFPlugin = stringIDToTypeID( "Crytek CryTIFPlugin" );
-    desc24.putObject( idAs, idCrytekCryTIFPlugin, desc25 );
-    var idIn = charIDToTypeID( "In  " );
-    desc24.putPath( idIn, new File( location ) );
-    var idCpy = charIDToTypeID( "Cpy " );
-    desc24.putBoolean( idCpy, true );
-executeAction( idsave, desc24, DialogModes.NO );
+function atnLaunchCryTifDialog_1(location) {
+  var idsave = charIDToTypeID( "save" );
+  var desc24 = new ActionDescriptor();
+  var idAs = charIDToTypeID( "As  " );
+  var desc25 = new ActionDescriptor();
+  var idbarF = charIDToTypeID( "barF" );
+  desc25.putBoolean( idbarF, true );
+  var idCrytekCryTIFPlugin = stringIDToTypeID( "Crytek CryTIFPlugin" );
+  desc24.putObject( idAs, idCrytekCryTIFPlugin, desc25 );
+  var idIn = charIDToTypeID( "In  " );
+  desc24.putPath( idIn, new File( location ) );
+  var idCpy = charIDToTypeID( "Cpy " );
+  desc24.putBoolean( idCpy, true );
+  executeAction( idsave, desc24, DialogModes.NO );
+}
+
+function atnLaunchCryTifDialog_2(location) {
+  var dialogMode = DialogModes.NO;
+  var desc1 = new ActionDescriptor();
+  desc1.putString(cTID('As  '), "CryTIFPlugin");
+  desc1.putPath(cTID('In  '), new File(location));
+  executeAction(cTID('save'), desc1, dialogMode);
 }
 
 // Function to fill a layer black
