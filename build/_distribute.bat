@@ -7,34 +7,36 @@ FOR /F %%i IN ('CHDIR') DO SET CWD=%%i
 
 REM SET GLOBALS
 REM ---------------------------------------------------------------------------- 
-SET "DEST=QSM-REV-%1"
+ECHO "Set Globals"
+SET "DEST=%CWD%\QSM-REV-%1"
 SET "XMNGR=%2"
 SET "ZIP7=%3"
 SET "MXI=%CWD%\QuickSaveMaps.mxi"
-SET "MXP=%CWD%\QuickSaveMaps.mxp"
+SET "ZXP=%CWD%\QuickSaveMaps.zxp"
 
-REM CREATE MXP
+REM CREATE ZXP
 REM ---------------------------------------------------------------------------- 
-echo %MXI%
-
-REM For some reasons -suppress causes the command not to work...
-REM %XMNGR% -suppress -package mxi=%MXI% mxp=%MXP%
-%XMNGR% -package mxi=%MXI% mxp=%MXP%
+ECHO "Create ZXP"
+%XMNGR% -suppress -package mxi=%MXI% zxp=%ZXP%
 
 REM DELETE DIR
 REM ---------------------------------------------------------------------------- 
-rmdir %DEST% /S /Q
-mkdir %DEST%
+ECHO "Delete dir"
+RMDIR %DEST% /S /Q
+ECHO "Make dir"
+MKDIR %DEST%
 
 REM COPY FILES
 REM ---------------------------------------------------------------------------- 
-xcopy "README.md"         %DEST% /Y
-xcopy "QuickSaveMaps.atn" %DEST% /Y
-xcopy "QuickSaveMaps.mxp" %DEST% /Y
+ECHO %DEST%
+ECHO "Copy files"
+XCOPY "README.md"         %DEST% /Y
+XCOPY "QuickSaveMaps.atn" %DEST% /Y
+XCOPY "QuickSaveMaps.zxp" %DEST% /Y
 
-REM REMOVE MXP FILE
+REM REMOVE ZXP FILE
 REM ---------------------------------------------------------------------------- 
-RM QuickSaveMaps.mxp
+RM QuickSaveMaps.zxp
 
 REM ZIP THE FOLDER UP
 REM ---------------------------------------------------------------------------- 
